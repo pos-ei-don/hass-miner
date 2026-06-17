@@ -214,6 +214,18 @@ def _board_sensors(board: BoardData) -> list[MinerSensorEntityDescription]:
             ),
         ),
         MinerSensorEntityDescription(
+            key=f"board_{n}_chip_temperature",
+            name=f"Board {n} Chip Temperature",
+            native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            suggested_display_precision=1,
+            value_fn=lambda d, _n=n: _board_value(d, _n, lambda b: b.chip_temperature),
+            available_fn=lambda d, _n=n: (
+                _board_value(d, _n, lambda b: b.chip_temperature) is not None
+            ),
+        ),
+        MinerSensorEntityDescription(
             key=f"board_{n}_intake_temperature",
             name=f"Board {n} Intake Temperature",
             native_unit_of_measurement=UnitOfTemperature.CELSIUS,
