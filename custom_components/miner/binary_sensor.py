@@ -16,14 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from pyasic_rs.data import MinerData
 
-from .const import (
-    CONF_ONLY_AVAILABLE,
-    CONF_SENSOR_DETAIL,
-    DEFAULT_ONLY_AVAILABLE,
-    DEFAULT_SENSOR_DETAIL,
-    DETAIL_DEBUG,
-    DOMAIN,
-)
+from .const import DOMAIN
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity
 
@@ -81,16 +74,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
-    data = coordinator.data
 
-    detail = entry.options.get(CONF_SENSOR_DETAIL, DEFAULT_SENSOR_DETAIL)
-    only_available = entry.options.get(CONF_ONLY_AVAILABLE, DEFAULT_ONLY_AVAILABLE)
-    gate_unavailable = only_available and detail != DETAIL_DEBUG
-
-    descriptions = list(BINARY_SENSORS)
-    if gate_unavailable and data is not None:
-        descriptions = [d for d in descriptions if d.available_fn(data)]
-
+    # No capability flag applies to the fault-light binary sensor and it is
+    # effectively universal, so it is always created (boot-immune); it reports
+    # ``unavailable`` at runtime if the value is momentarily absent.
     async_add_entities(
-        MinerBinarySensorEntity(coordinator, desc) for desc in descriptions
+        MinerBinarySensorEntity(coordinator, desc) for desc in BINARY_SENSORS
     )

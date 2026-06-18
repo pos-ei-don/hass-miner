@@ -88,6 +88,22 @@ MINER_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
         value_fn=lambda d: d.average_temperature,
         available_fn=lambda d: d.average_temperature is not None,
     ),
+    # Hottest temperature across all hashboards (board / chip / intake / outlet).
+    # This is the safety-relevant aggregate: it is ALWAYS created — never gated by
+    # detail level or capability — so an over-temperature alarm can watch a single
+    # entity regardless of whether the individual per-board temperatures are shown.
+    # It reads the polled board data directly, so it works even when no per-board
+    # entities exist (e.g. "summary" detail).
+    MinerSensorEntityDescription(
+        key="max_temperature",
+        name="Max Temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=lambda d: _max_temperature(d),
+        available_fn=lambda d: _max_temperature(d) is not None,
+    ),
     MinerSensorEntityDescription(
         key="fluid_temperature",
         name="Fluid Temperature",
@@ -185,6 +201,27 @@ def _primary_pool_url(data: MinerData) -> str | None:
     return pool.url if pool else None
 
 
+def _max_temperature(data: MinerData) -> float | None:
+    """Hottest temperature reported across all hashboards.
+
+    Considers every per-board temperature reading (board, chip, intake, outlet)
+    so an over-temperature alarm can compare this single value against the
+    miner's configured threshold, independent of which sensors are surfaced.
+    """
+    temps = [
+        t
+        for board in data.hashboards
+        for t in (
+            board.board_temperature,
+            board.chip_temperature,
+            board.intake_temperature,
+            board.outlet_temperature,
+        )
+        if t is not None
+    ]
+    return max(temps) if temps else None
+
+
 # ── Per-board sensor factories ──────────────────────────────────────────────
 
 
@@ -194,9 +231,9 @@ _BOARD_SUMMARY_KEYS = ("hashrate", "board_temperature", "chip_temperature")
 
 
 def _board_sensors(
-    board: BoardData, reduced: bool = False
+    position: int, reduced: bool = False, include_chip_temp: bool = True
 ) -> list[MinerSensorEntityDescription]:
-    n = board.position
+    n = position
     descriptions = [
         MinerSensorEntityDescription(
             key=f"board_{n}_hashrate",
@@ -306,6 +343,10 @@ def _board_sensors(
     if reduced:
         suffixes = tuple(f"board_{n}_{k}" for k in _BOARD_SUMMARY_KEYS)
         descriptions = [d for d in descriptions if d.key in suffixes]
+    if not include_chip_temp:
+        descriptions = [
+            d for d in descriptions if d.key != f"board_{n}_chip_temperature"
+        ]
     return descriptions
 
 
@@ -382,34 +423,66 @@ async def async_setup_entry(
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
     data = coordinator.data
 
+    # Capability gating is driven purely by what the device *structurally*
+    # supports (model + firmware), exposed on DeviceInfo and constant for a given
+    # device. This is deterministic and boot-immune: the create/don't-create
+    # decision never depends on a (possibly transient) live value, so a sensor
+    # that is momentarily ``None`` right after the miner boots still gets its
+    # entity — it simply reports ``unavailable`` until the value arrives. There is
+    # no value-snapshot fallback.
+    # pyasic-rs 0.6.0: DeviceInfo exposes fields via model_dump(), not attrs.
+    di = data.device_info.model_dump() if data and data.device_info else {}
+    hardware = di.get("hardware") or {}
+    expected_boards = hardware.get("boards") or []
+    expected_fans = hardware.get("fans")
+    # Air vs Hydro/Immersion — only liquid-cooled miners have a fluid temperature.
+    is_hydro = di.get("cooling", "Air") != "Air"
+    # Firmware-dependent: only some firmwares (e.g. VNish) report chip temps.
+    reports_chip_temp = bool(di.get("reports_chip_temperature", False))
+
     detail = entry.options.get(CONF_SENSOR_DETAIL, DEFAULT_SENSOR_DETAIL)
     only_available = entry.options.get(CONF_ONLY_AVAILABLE, DEFAULT_ONLY_AVAILABLE)
-    # Debug level shows everything, including currently-empty entities — so the
-    # availability gate is intentionally bypassed there.
-    gate_unavailable = only_available and detail != DETAIL_DEBUG
+    # Debug shows everything regardless of capability; otherwise the "only
+    # type-relevant sensors" toggle (default on) applies the structural gates.
+    apply_caps = only_available and detail != DETAIL_DEBUG
 
-    descriptions: list[MinerSensorEntityDescription] = list(MINER_SENSORS)
+    # Top-level sensors. The only capability-gated one is the fluid temperature.
+    descriptions: list[MinerSensorEntityDescription] = [
+        d
+        for d in MINER_SENSORS
+        if d.key != "fluid_temperature" or is_hydro or not apply_caps
+    ]
 
-    # Per-board sensors. ``summary`` keeps only the miner-wide aggregates above
-    # (e.g. average_temperature); the more verbose levels add per-board entities.
+    # Per-board sensors. ``summary`` keeps only the miner-wide aggregates above;
+    # the more verbose levels add per-board entities. Boards are enumerated from
+    # the model's *expected* hardware shape (boot-immune), falling back to the
+    # live hashboards only for genuinely-unknown models with no static shape.
     if detail in (DETAIL_BOARD_SUMMARY, DETAIL_BOARD_INDIVIDUAL, DETAIL_DEBUG):
         reduced = detail == DETAIL_BOARD_SUMMARY
-        for board in data.hashboards:
-            descriptions.extend(_board_sensors(board, reduced=reduced))
+        include_chip_temp = reports_chip_temp or not apply_caps
+        positions = (
+            range(len(expected_boards))
+            if expected_boards
+            else [b.position for b in data.hashboards]
+        )
+        for position in positions:
+            descriptions.extend(
+                _board_sensors(
+                    position, reduced=reduced, include_chip_temp=include_chip_temp
+                )
+            )
 
-    # Fan sensors are per-board-individual / debug only (and only created when
-    # the miner actually reports fans — see the availability gate below).
+    # Fan RPM sensors are per-board-individual / debug only. Enumerated from the
+    # expected fan count (boot-immune), falling back to live fans if unknown.
     if detail in (DETAIL_BOARD_INDIVIDUAL, DETAIL_DEBUG):
-        for fan in data.fans:
-            descriptions.append(_fan_sensor(fan.position, psu=False))
+        fan_positions = (
+            range(expected_fans)
+            if expected_fans
+            else [f.position for f in data.fans]
+        )
+        for position in fan_positions:
+            descriptions.append(_fan_sensor(position, psu=False))
         for fan in data.psu_fans:
             descriptions.append(_fan_sensor(fan.position, psu=True))
-
-    # "Only available / type-relevant sensors": skip entities whose value is
-    # None/absent for THIS miner. This is what drops the hydro-only fluid/water
-    # temperatures on air-cooled miners and the empty per-board sensors on an
-    # offline miner, without any per-type special-casing.
-    if gate_unavailable:
-        descriptions = [d for d in descriptions if d.available_fn(data)]
 
     async_add_entities(MinerSensorEntity(coordinator, desc) for desc in descriptions)
