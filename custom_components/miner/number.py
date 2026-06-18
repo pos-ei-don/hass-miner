@@ -91,11 +91,21 @@ async def async_setup_entry(
 
     entities: list[MinerEntity] = []
 
-    if coordinator.miner.supports_set_power_limit:
+    # Native PowerLimit is gated on a miner capability flag. When the miner is
+    # None (offline at startup) we cannot know it, so we skip the native entity;
+    # it appears after the first successful connection + a reload.
+    if (
+        coordinator.miner is not None
+        and coordinator.miner.supports_set_power_limit
+    ):
         entities.append(PowerLimitNumber(coordinator))
 
     # BETA: VNish throttle for VNish-firmware miners (asic-rs read-only here).
-    if coordinator.is_vnish:
+    # VNish detection falls back to the cached profile when offline at startup.
+    is_vnish = coordinator.is_vnish or bool(
+        coordinator.profile and coordinator.profile.get("is_vnish")
+    )
+    if is_vnish:
         entities.append(VnishThrottleNumber(coordinator))
 
     async_add_entities(entities)

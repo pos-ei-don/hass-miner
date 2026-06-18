@@ -119,7 +119,6 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
-    data = coordinator.data
 
     categories = set(
         entry.options.get(CONF_SENSOR_CATEGORIES, DEFAULT_SENSOR_CATEGORIES)
@@ -135,9 +134,8 @@ async def async_setup_entry(
     # configured and the safety category is enabled.
     add_boot_timeout = CAT_SAFETY in categories and coordinator.power_entity
 
-    device_uid = (
-        data.mac.replace(":", "").lower() if data and data.mac else coordinator.ip
-    )
+    mac = coordinator.device_mac
+    device_uid = mac.replace(":", "").lower() if mac else coordinator.ip
     keep = {f"{device_uid}_{d.key}" for d in descriptions}
     if add_boot_timeout:
         keep.add(f"{device_uid}_boot_timeout")

@@ -212,7 +212,9 @@ def _problem_messages(data: MinerData) -> list[str]:
             if text is None:
                 text = getattr(message, "text", None)
             text = str(text or "").strip()
-            if text:
+            if text and severity:
+                out.append(f"{severity}: {text}")
+            elif text:
                 out.append(text)
             elif severity:
                 out.append(severity)
@@ -397,14 +399,9 @@ _SUMMARY_HYDRO_ONLY = ("fluid_temperature", "water_inlet_min", "water_outlet_max
 
 # ── Safety / Diagnose (CAT_SAFETY) ──────────────────────────────────────────
 
-SAFETY_REASON = MinerSensorEntityDescription(
-    key="safety_alarm_reason",
-    name="Safety Alarm Reason",
-    entity_category=EntityCategory.DIAGNOSTIC,
-    icon="mdi:shield-alert",
-    value_fn=_alarm_reason,
-    available_fn=lambda _: True,
-)
+# The safety alarm reason is now a dedicated coordinator-aware entity
+# (``MinerSafetyReasonSensor``) so it can also surface the boot-timeout latch,
+# rather than a data-only value_fn description.
 
 # The device's OWN configured thermal limits, surfaced as diagnostics so the
 # alarm's comparison values are visible. Schicht B: read defensively, so they
@@ -601,6 +598,51 @@ class MinerSensorEntity(MinerEntity, SensorEntity):
         return self.entity_description.available_fn(self.coordinator.data)
 
 
+class MinerSafetyReasonSensor(MinerEntity, SensorEntity):
+    """Coordinator-aware safety alarm reason.
+
+    Unlike the data-only sensors this also surfaces the coordinator-level
+    boot-timeout latch (which is not part of MinerData), so the reason text can
+    explain a miner that never came up after power-on. Keeps the historic key
+    ``safety_alarm_reason`` so the unique_id is unchanged from earlier alphas.
+    """
+
+    _attr_name = "Safety Alarm Reason"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:shield-alert"
+
+    def __init__(self, coordinator: MinerCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._device_unique_id}_safety_alarm_reason"
+
+    @property
+    def native_value(self) -> str:
+        coordinator = self.coordinator
+        data = coordinator.data
+        if coordinator.boot_failed:
+            boot_msg = (
+                f"miner did not come online within {coordinator.boot_timeout}s "
+                "after power-on"
+            )
+            if data is not None:
+                reason = _alarm_reason(data)
+                if reason and reason != "OK":
+                    return f"{boot_msg}; {reason}"
+            return boot_msg
+        if data is not None:
+            return _alarm_reason(data)
+        # No data and not a boot failure: distinguish "powered off" from a plain
+        # communication outage so the reason text is meaningful while offline.
+        if coordinator.power_entity and not coordinator.power_on:
+            return "powered off"
+        return "unavailable"
+
+    @property
+    def available(self) -> bool:
+        # Always meaningful while the entity exists (boot/offline reasons too).
+        return True
+
+
 # ── Platform setup ──────────────────────────────────────────────────────────
 
 
@@ -618,11 +660,15 @@ async def async_setup_entry(
     only_available = entry.options.get(CONF_ONLY_AVAILABLE, DEFAULT_ONLY_AVAILABLE)
 
     # Capability gates (Schicht B / B1), defensive: True/False when the lib knows,
-    # None on stock 0.6.2 so the only_available None-gate decides.
-    is_hydro = _cooling_is_hydro(data)
-    reports_chip = _reports_chip_temp(data)
+    # None on stock 0.6.2 / when offline so the only_available None-gate decides.
+    is_hydro = _cooling_is_hydro(data) if data is not None else None
+    reports_chip = _reports_chip_temp(data) if data is not None else None
 
     descriptions: list[MinerSensorEntityDescription] = []
+    # The coordinator-backed safety-reason sensor is added separately (it is not
+    # a value_fn description); track it here so stale-cleanup keeps it.
+    extra_keys: set[str] = set()
+    add_safety_reason = False
 
     # Miner-wide aggregates / statistics.
     if CAT_MINER_SUMMARY in categories:
@@ -632,15 +678,16 @@ async def async_setup_entry(
                 continue
             descriptions.append(d)
 
-    # Safety / diagnose: the alarm reason text (always meaningful, "OK" by default).
+    # Safety / diagnose: the coordinator-aware alarm reason + device thermal limits.
     if CAT_SAFETY in categories:
-        descriptions.append(SAFETY_REASON)
+        add_safety_reason = True
+        extra_keys.add("safety_alarm_reason")
         descriptions.extend(SAFETY_LIMIT_SENSORS)
 
-    # Per-board sensors, matched to the live hashboards by position.
+    # Per-board sensors, enumerated from the coordinator (live data when present,
+    # else the cached profile) so they exist even when the miner is offline.
     if CAT_BOARD_TEMPS in categories or CAT_BOARD_PERF in categories:
-        positions = [b.position for b in data.hashboards]
-        for n in positions:
+        for n in coordinator.board_positions:
             if CAT_BOARD_TEMPS in categories:
                 for d in _board_temp_sensors(n):
                     # Chip temp: drop only when the lib positively says it isn't reported.
@@ -653,23 +700,34 @@ async def async_setup_entry(
             if CAT_BOARD_PERF in categories:
                 descriptions.extend(_board_perf_sensors(n))
 
-    # Fan RPM sensors.
+    # Fan RPM sensors, enumerated from the coordinator (live data or cache).
     if CAT_FANS in categories:
-        for fan in data.fans:
-            descriptions.append(_fan_sensor(fan.position, psu=False))
-        for fan in data.psu_fans:
-            descriptions.append(_fan_sensor(fan.position, psu=True))
+        for pos in coordinator.fan_positions:
+            descriptions.append(_fan_sensor(pos, psu=False))
+        for pos in coordinator.psu_fan_positions:
+            descriptions.append(_fan_sensor(pos, psu=True))
 
     # only_available gate (A4): drop descriptions whose value is unavailable now.
-    if only_available:
+    # When offline (data is None) we cannot evaluate availability — create
+    # everything from the profile; the entities are unavailable anyway until a
+    # poll succeeds, and a later reload re-applies the filter.
+    if only_available and data is not None:
         descriptions = [d for d in descriptions if d.available_fn(data)]
 
     # Clean up entities of any category/sensor we are no longer producing
-    # (same unique-id scheme as MinerEntity).
-    device_uid = (
-        data.mac.replace(":", "").lower() if data and data.mac else coordinator.ip
-    )
-    keep = {f"{device_uid}_{d.key}" for d in descriptions}
+    # (same unique-id scheme as MinerEntity). device_uid prefers MAC (live or
+    # cached) so we never wipe entities just because the miner is momentarily
+    # offline.
+    mac = coordinator.device_mac
+    device_uid = mac.replace(":", "").lower() if mac else coordinator.ip
+    keep = {f"{device_uid}_{d.key}" for d in descriptions} | {
+        f"{device_uid}_{k}" for k in extra_keys
+    }
     async_remove_stale_entities(hass, entry, "sensor", keep)
 
-    async_add_entities(MinerSensorEntity(coordinator, desc) for desc in descriptions)
+    entities: list[SensorEntity] = [
+        MinerSensorEntity(coordinator, desc) for desc in descriptions
+    ]
+    if add_safety_reason:
+        entities.append(MinerSafetyReasonSensor(coordinator))
+    async_add_entities(entities)

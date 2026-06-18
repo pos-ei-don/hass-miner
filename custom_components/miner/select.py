@@ -59,7 +59,12 @@ async def async_setup_entry(
 
     entities: list[MinerEntity] = []
 
-    if coordinator.is_vnish:
+    # VNish detection comes from the live connection; when offline-at-startup we
+    # fall back to the cached profile so the shim entities still appear.
+    is_vnish = coordinator.is_vnish or bool(
+        coordinator.profile and coordinator.profile.get("is_vnish")
+    )
+    if is_vnish:
         entities.append(VnishPresetSelect(coordinator))
 
     async_add_entities(entities)
