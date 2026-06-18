@@ -62,8 +62,7 @@ _ICONS: dict[str, str] = {
     "pool_rejected_shares": "mdi:close",
     "pool_url": "mdi:swim",
     "fluid_temperature": "mdi:thermometer-water",
-    "water_inlet_min": "mdi:thermometer-water",
-    "water_outlet_max": "mdi:thermometer-water",
+    "outlet_fluid_temperature": "mdi:thermometer-water",
     "safety_alarm_reason": "mdi:shield-alert",
 }
 _ICON_SUFFIXES: dict[str, str] = {
@@ -153,38 +152,27 @@ def _fan_rpm(data: MinerData, position: int, psu: bool) -> float | None:
     return None
 
 
-def _min_intake(data: MinerData) -> float | None:
-    """Coolest per-board intake temperature (≈ coolant inlet on hydro miners)."""
-    temps = [
-        b.intake_temperature for b in data.hashboards if b.intake_temperature is not None
-    ]
-    return min(temps) if temps else None
-
-
-def _max_outlet(data: MinerData) -> float | None:
-    """Warmest per-board outlet temperature (≈ coolant return on hydro miners)."""
-    temps = [
-        b.outlet_temperature for b in data.hashboards if b.outlet_temperature is not None
-    ]
-    return max(temps) if temps else None
-
-
 def _max_temperature(data: MinerData) -> float | None:
     """Hottest temperature reported across boards plus miner-wide temps.
 
-    ``chip_temperature`` is read defensively (absent on stock 0.6.2).
+    Per-board chip temps (``inlet_chip_temperature``/``outlet_chip_temperature``)
+    and the miner-level coolant outlet (``outlet_fluid_temperature``) are read
+    defensively, since not every lib version / miner exposes them.
     """
     temps: list[float] = []
     for board in data.hashboards:
         for t in (
             board.board_temperature,
-            getattr(board, "chip_temperature", None),
-            board.intake_temperature,
-            board.outlet_temperature,
+            getattr(board, "inlet_chip_temperature", None),
+            getattr(board, "outlet_chip_temperature", None),
         ):
             if t is not None:
                 temps.append(t)
-    for t in (data.average_temperature, data.fluid_temperature):
+    for t in (
+        data.average_temperature,
+        getattr(data, "fluid_temperature", None),
+        getattr(data, "outlet_fluid_temperature", None),
+    ):
         if t is not None:
             temps.append(t)
     return max(temps) if temps else None
@@ -239,7 +227,7 @@ def _alarm_reason(data: MinerData) -> str:
     hot = getattr(data, "restart_temperature", None)
     cold = getattr(data, "min_startup_temperature", None)
     maxtemp = _max_temperature(data)
-    inlet = _min_intake(data)
+    inlet = getattr(data, "fluid_temperature", None)
 
     if hot is not None and maxtemp is not None and maxtemp >= hot:
         reasons.append(f"too hot ({maxtemp:.0f} °C ≥ {hot:.0f} °C)")
@@ -302,37 +290,29 @@ MINER_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
         value_fn=_max_temperature,
         available_fn=lambda d: _max_temperature(d) is not None,
     ),
+    # Coolant inlet — the miner-level fluid temperature (water inlet on hydro).
     MinerSensorEntityDescription(
         key="fluid_temperature",
-        name="Fluid Temperature",
+        name="Coolant Inlet",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
-        value_fn=lambda d: d.fluid_temperature,
-        available_fn=lambda d: d.fluid_temperature is not None,
+        value_fn=lambda d: getattr(d, "fluid_temperature", None),
+        available_fn=lambda d: getattr(d, "fluid_temperature", None) is not None,
     ),
-    # Coolant in/out aggregates across all boards (hydro only): coldest inlet and
-    # hottest outlet — the safety-relevant water extremes, without per-board entities.
+    # Coolant outlet — the miner-level exhaust/return fluid temperature. Only
+    # present on water-cooled miners with the sensor; None (and thus dropped)
+    # otherwise.
     MinerSensorEntityDescription(
-        key="water_inlet_min",
-        name="Water Inlet (min)",
+        key="outlet_fluid_temperature",
+        name="Coolant Outlet",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
-        value_fn=_min_intake,
-        available_fn=lambda d: _min_intake(d) is not None,
-    ),
-    MinerSensorEntityDescription(
-        key="water_outlet_max",
-        name="Water Outlet (max)",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=1,
-        value_fn=_max_outlet,
-        available_fn=lambda d: _max_outlet(d) is not None,
+        value_fn=lambda d: getattr(d, "outlet_fluid_temperature", None),
+        available_fn=lambda d: getattr(d, "outlet_fluid_temperature", None) is not None,
     ),
     MinerSensorEntityDescription(
         key="wattage",
@@ -394,7 +374,7 @@ MINER_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
 
 # Members of Miner-Summary that only make sense on liquid-cooled miners. When the
 # lib reports cooling we trust it; otherwise the only_available None-gate decides.
-_SUMMARY_HYDRO_ONLY = ("fluid_temperature", "water_inlet_min", "water_outlet_max")
+_SUMMARY_HYDRO_ONLY = ("fluid_temperature", "outlet_fluid_temperature")
 
 
 # ── Safety / Diagnose (CAT_SAFETY) ──────────────────────────────────────────
@@ -436,9 +416,10 @@ SAFETY_LIMIT_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
 def _board_temp_sensors(n: int) -> list[MinerSensorEntityDescription]:
     """Per-board temperature sensors (CAT_BOARD_TEMPS).
 
-    ``board_{n}_chip_temperature`` (B3) reads ``chip_temperature`` defensively;
-    on stock 0.6.2 the field is absent so its value is None and only_available
-    drops it.
+    ``board_{n}_inlet_chip_temperature`` / ``board_{n}_outlet_chip_temperature``
+    (B3) read the inlet-/outlet-side CHIP temps defensively; where the firmware
+    doesn't report chip temps the value is None and only_available drops them.
+    The PCB ``board_temperature`` sensor is always emitted.
     """
     return [
         MinerSensorEntityDescription(
@@ -455,43 +436,32 @@ def _board_temp_sensors(n: int) -> list[MinerSensorEntityDescription]:
             is not None,
         ),
         MinerSensorEntityDescription(
-            key=f"board_{n}_chip_temperature",
-            name=f"Board {n} Chip Temperature",
+            key=f"board_{n}_inlet_chip_temperature",
+            name=f"Board {n} Chip Temp (inlet)",
             native_unit_of_measurement=UnitOfTemperature.CELSIUS,
             device_class=SensorDeviceClass.TEMPERATURE,
             state_class=SensorStateClass.MEASUREMENT,
             suggested_display_precision=1,
             value_fn=lambda d, _n=n: _board_value(
-                d, _n, lambda b: getattr(b, "chip_temperature", None)
+                d, _n, lambda b: getattr(b, "inlet_chip_temperature", None)
             ),
             available_fn=lambda d, _n=n: _board_value(
-                d, _n, lambda b: getattr(b, "chip_temperature", None)
+                d, _n, lambda b: getattr(b, "inlet_chip_temperature", None)
             )
             is not None,
         ),
         MinerSensorEntityDescription(
-            key=f"board_{n}_intake_temperature",
-            name=f"Board {n} Intake Temperature",
+            key=f"board_{n}_outlet_chip_temperature",
+            name=f"Board {n} Chip Temp (outlet)",
             native_unit_of_measurement=UnitOfTemperature.CELSIUS,
             device_class=SensorDeviceClass.TEMPERATURE,
             state_class=SensorStateClass.MEASUREMENT,
             suggested_display_precision=1,
-            value_fn=lambda d, _n=n: _board_value(d, _n, lambda b: b.intake_temperature),
+            value_fn=lambda d, _n=n: _board_value(
+                d, _n, lambda b: getattr(b, "outlet_chip_temperature", None)
+            ),
             available_fn=lambda d, _n=n: _board_value(
-                d, _n, lambda b: b.intake_temperature
-            )
-            is not None,
-        ),
-        MinerSensorEntityDescription(
-            key=f"board_{n}_outlet_temperature",
-            name=f"Board {n} Outlet Temperature",
-            native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-            device_class=SensorDeviceClass.TEMPERATURE,
-            state_class=SensorStateClass.MEASUREMENT,
-            suggested_display_precision=1,
-            value_fn=lambda d, _n=n: _board_value(d, _n, lambda b: b.outlet_temperature),
-            available_fn=lambda d, _n=n: _board_value(
-                d, _n, lambda b: b.outlet_temperature
+                d, _n, lambda b: getattr(b, "outlet_chip_temperature", None)
             )
             is not None,
         ),
@@ -689,12 +659,14 @@ async def async_setup_entry(
     if CAT_BOARD_TEMPS in categories or CAT_BOARD_PERF in categories:
         for n in coordinator.board_positions:
             if CAT_BOARD_TEMPS in categories:
+                chip_keys = (
+                    f"board_{n}_inlet_chip_temperature",
+                    f"board_{n}_outlet_chip_temperature",
+                )
                 for d in _board_temp_sensors(n):
-                    # Chip temp: drop only when the lib positively says it isn't reported.
-                    if (
-                        d.key == f"board_{n}_chip_temperature"
-                        and reports_chip is False
-                    ):
+                    # Chip temps: drop only when the lib positively says they
+                    # aren't reported.
+                    if d.key in chip_keys and reports_chip is False:
                         continue
                     descriptions.append(d)
             if CAT_BOARD_PERF in categories:

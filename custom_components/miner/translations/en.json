@@ -80,7 +80,7 @@
       "options": {
         "miner_summary": "Miner summary (hashrate, power, J/TH, temps, uptime, pools)",
         "safety": "Safety / diagnose (alarm + reason)",
-        "board_temps": "Per-board temperatures (board / chip / intake / outlet)",
+        "board_temps": "Per-board temperatures (PCB board + inlet/outlet chip temps)",
         "board_perf": "Per-board performance (hashrate / voltage / frequency / chips)",
         "fans": "Fans (RPM)"
       }

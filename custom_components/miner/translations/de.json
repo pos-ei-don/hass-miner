@@ -80,7 +80,7 @@
       "options": {
         "miner_summary": "Miner-Summary (Hashrate, Leistung, J/TH, Temperaturen, Uptime, Pools)",
         "safety": "Safety / Diagnose (Alarm + Begründung)",
-        "board_temps": "Pro-Board-Temperaturen (Board / Chip / Intake / Outlet)",
+        "board_temps": "Pro-Board-Temperaturen (PCB-Board + Inlet-/Outlet-Chip-Temperaturen)",
         "board_perf": "Pro-Board-Leistung (Hashrate / Spannung / Frequenz / Chips)",
         "fans": "Lüfter (RPM)"
       }
