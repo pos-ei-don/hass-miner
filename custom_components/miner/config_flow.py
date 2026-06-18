@@ -14,6 +14,8 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    EntitySelector,
+    EntitySelectorConfig,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -26,14 +28,19 @@ from homeassistant.helpers.selector import (
 from pyasic_rs import MinerFactory
 
 from .const import (
+    CONF_BOOT_TIMEOUT,
     CONF_ONLY_AVAILABLE,
+    CONF_POWER_ENTITY,
     CONF_SCAN_INTERVAL,
     CONF_SENSOR_CATEGORIES,
+    DEFAULT_BOOT_TIMEOUT,
     DEFAULT_ONLY_AVAILABLE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SENSOR_CATEGORIES,
     DOMAIN,
+    MAX_BOOT_TIMEOUT,
     MAX_SCAN_INTERVAL,
+    MIN_BOOT_TIMEOUT,
     MIN_SCAN_INTERVAL,
     SENSOR_CATEGORIES,
 )
@@ -270,6 +277,8 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
             CONF_ONLY_AVAILABLE, DEFAULT_ONLY_AVAILABLE
         )
         current_scan_interval = options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        current_power_entity = options.get(CONF_POWER_ENTITY, "")
+        current_boot_timeout = options.get(CONF_BOOT_TIMEOUT, DEFAULT_BOOT_TIMEOUT)
 
         categories_select = SelectSelector(
             SelectSelectorConfig(
@@ -291,6 +300,20 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                 mode=NumberSelectorMode.BOX,
             )
         )
+        power_entity_select = EntitySelector(
+            EntitySelectorConfig(
+                domain=["switch", "binary_sensor", "input_boolean"]
+            )
+        )
+        boot_timeout_select = NumberSelector(
+            NumberSelectorConfig(
+                min=MIN_BOOT_TIMEOUT,
+                max=MAX_BOOT_TIMEOUT,
+                step=5,
+                unit_of_measurement="s",
+                mode=NumberSelectorMode.BOX,
+            )
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -305,6 +328,16 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_SCAN_INTERVAL, default=current_scan_interval
                     ): scan_interval_select,
+                    # EntitySelector: no hard default — pass the current value via
+                    # suggested_value so submitting without a selection simply
+                    # omits the key (key absent ⇒ power-aware polling disabled).
+                    vol.Optional(
+                        CONF_POWER_ENTITY,
+                        description={"suggested_value": current_power_entity or None},
+                    ): power_entity_select,
+                    vol.Optional(
+                        CONF_BOOT_TIMEOUT, default=current_boot_timeout
+                    ): boot_timeout_select,
                     vol.Optional(CONF_PASSWORD, default=current_password): str,
                 }
             ),

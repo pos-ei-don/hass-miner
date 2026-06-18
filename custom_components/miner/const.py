@@ -8,6 +8,18 @@ DEFAULT_SCAN_INTERVAL = 30  # seconds
 MIN_SCAN_INTERVAL = 10
 MAX_SCAN_INTERVAL = 600
 
+# ── Options: power-aware polling (optional) ─────────────────────────────────
+# When a power switch/sensor entity is configured, the coordinator pauses
+# network polling while the miner is powered off, runs a fast "boot loop" right
+# after power-on until the miner answers, and latches a boot-timeout alarm if it
+# never comes up in time. Default unset ⇒ exact current behavior (always-on).
+CONF_POWER_ENTITY = "power_entity"
+CONF_BOOT_TIMEOUT = "boot_timeout"
+DEFAULT_BOOT_TIMEOUT = 120  # seconds to wait for the miner after power-on
+MIN_BOOT_TIMEOUT = 30
+MAX_BOOT_TIMEOUT = 600
+BOOT_POLL_INTERVAL = 10  # seconds, the fast loop during boot
+
 # ── Options: which sensors to create ────────────────────────────────────────
 # The asic-rs entity model emits a large number of per-board sensors plus a few
 # type-specific values. The user ticks the categories they want; gating happens

@@ -5,16 +5,18 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from pyasic_rs import MinerFactory
 from pyasic_rs.data import MinerData
 from pyasic_rs.miner import Miner
 
 from . import vnish
-from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import BOOT_POLL_INTERVAL, DEFAULT_BOOT_TIMEOUT, DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,10 +33,16 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         username: str | None = None,
         password: str | None = None,
         scan_interval: int | None = None,
+        power_entity: str | None = None,
+        boot_timeout: int = DEFAULT_BOOT_TIMEOUT,
     ) -> None:
         self.ip = ip
         self.username = username
         self.password = password
+
+        # Configured (normal) scan interval — kept so we can restore it after a
+        # boot fast-loop or after power returns.
+        self._scan_interval = scan_interval or DEFAULT_SCAN_INTERVAL
 
         # BETA VNish control state (populated only for VNish miners).
         self.is_vnish: bool = False
@@ -42,14 +50,76 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         self.vnish_preset: str | None = None
         self.vnish_throttle: int | None = None
 
+        # ── Power-aware polling state ──────────────────────────────────────
+        # When no power_entity is configured, power_on stays True forever and
+        # none of the power logic ever fires ⇒ exact legacy behavior.
+        self.power_entity = power_entity or None
+        self.boot_timeout = boot_timeout
+        self.power_on: bool = True
+        self.booting: bool = False
+        self.boot_failed: bool = False
+        self._power_on_since = None
+        self._power_unsub = None
+
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}_{ip}",
-            update_interval=timedelta(seconds=scan_interval or DEFAULT_SCAN_INTERVAL),
+            update_interval=timedelta(seconds=self._scan_interval),
         )
 
+    # ── Power tracking ─────────────────────────────────────────────────────
+
+    async def async_setup_power_tracking(self) -> None:
+        """Read the power entity's current state and subscribe to changes.
+
+        Called from __init__.py after the coordinator is created but before the
+        first refresh. No-op when no power_entity is configured.
+        """
+        if not self.power_entity:
+            return
+        state = self.hass.states.get(self.power_entity)
+        self.power_on = state is not None and state.state == "on"
+        self._power_unsub = async_track_state_change_event(
+            self.hass, [self.power_entity], self._handle_power_event
+        )
+
+    @callback
+    def _stop_power_tracking(self) -> None:
+        """Unsubscribe from the power entity (registered on entry unload)."""
+        if self._power_unsub is not None:
+            self._power_unsub()
+            self._power_unsub = None
+
+    @callback
+    def _handle_power_event(self, event) -> None:
+        new = event.data.get("new_state")
+        on = new is not None and new.state == "on"
+
+        if on and not self.power_on:
+            # OFF → ON: begin the fast boot loop and poll immediately.
+            self.power_on = True
+            self.booting = True
+            self.boot_failed = False
+            self._power_on_since = dt_util.utcnow()
+            self.update_interval = timedelta(seconds=BOOT_POLL_INTERVAL)
+            self.hass.async_create_task(self.async_request_refresh())
+        elif not on and self.power_on:
+            # ON → OFF: stop polling the network, restore normal cadence.
+            self.power_on = False
+            self.booting = False
+            self.boot_failed = False
+            self._power_on_since = None
+            self.update_interval = timedelta(seconds=self._scan_interval)
+            # Push state so entities re-evaluate availability. _async_update_data
+            # will now short-circuit (powered off), so entities go unavailable.
+            self.async_update_listeners()
+
+    # ── Setup / update ─────────────────────────────────────────────────────
+
     async def _async_setup(self) -> None:
+        if self.power_entity and not self.power_on:
+            raise UpdateFailed("miner powered off")
         factory = MinerFactory()
         miner = await factory.get_miner(self.ip)
         if miner is None:
@@ -69,14 +139,34 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             self.vnish_presets = list(vnish.FALLBACK_PRESETS)
 
     async def _async_update_data(self) -> MinerData:
+        if self.power_entity and not self.power_on:
+            # Benign: no network call while powered off. Entities go unavailable.
+            raise UpdateFailed("miner powered off")
         if self.miner is None:
             await self._async_setup()
         try:
             data = await self.miner.get_data()
         except Exception as err:
+            # While booting, latch the alarm once the boot timeout has elapsed,
+            # but keep fast-retrying (booting stays True) until the miner answers.
+            if (
+                self.booting
+                and self._power_on_since is not None
+                and (dt_util.utcnow() - self._power_on_since).total_seconds()
+                > self.boot_timeout
+            ):
+                self.boot_failed = True
             raise UpdateFailed(
                 f"Error communicating with miner at {self.ip}: {err}"
             ) from err
+
+        # Success: if we were booting, the miner is up — clear boot state and
+        # restore the normal polling cadence.
+        if self.booting:
+            self.booting = False
+            self.boot_failed = False
+            self.update_interval = timedelta(seconds=self._scan_interval)
+
         if self.is_vnish:
             await self._async_update_vnish()
         return data

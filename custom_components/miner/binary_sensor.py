@@ -62,6 +62,32 @@ SAFETY_BINARY_SENSORS: tuple[MinerBinarySensorDescription, ...] = (
 )
 
 
+class MinerBootTimeoutBinarySensor(MinerEntity, BinarySensorEntity):
+    """Coordinator-backed boot-timeout alarm (not MinerData-backed).
+
+    Only created when a power_entity is configured AND CAT_SAFETY is enabled.
+    Latches ON when the miner fails to come up within boot_timeout after a
+    power-on transition.
+    """
+
+    _attr_name = "Boot Timeout"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:timer-alert"
+
+    def __init__(self, coordinator: MinerCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._device_unique_id}_boot_timeout"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.boot_failed
+
+    @property
+    def available(self) -> bool:
+        # The alarm itself is always meaningful while the entity exists.
+        return True
+
+
 class MinerBinarySensorEntity(MinerEntity, BinarySensorEntity):
     entity_description: MinerBinarySensorDescription
 
@@ -105,12 +131,22 @@ async def async_setup_entry(
     if CAT_SAFETY in categories:
         descriptions.extend(SAFETY_BINARY_SENSORS)
 
+    # Boot-timeout alarm: coordinator-backed, only when power-aware polling is
+    # configured and the safety category is enabled.
+    add_boot_timeout = CAT_SAFETY in categories and coordinator.power_entity
+
     device_uid = (
         data.mac.replace(":", "").lower() if data and data.mac else coordinator.ip
     )
     keep = {f"{device_uid}_{d.key}" for d in descriptions}
+    if add_boot_timeout:
+        keep.add(f"{device_uid}_boot_timeout")
     async_remove_stale_entities(hass, entry, "binary_sensor", keep)
 
-    async_add_entities(
+    entities: list[BinarySensorEntity] = [
         MinerBinarySensorEntity(coordinator, desc) for desc in descriptions
-    )
+    ]
+    if add_boot_timeout:
+        entities.append(MinerBootTimeoutBinarySensor(coordinator))
+
+    async_add_entities(entities)

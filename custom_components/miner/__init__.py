@@ -6,7 +6,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import (
+    CONF_BOOT_TIMEOUT,
+    CONF_POWER_ENTITY,
+    CONF_SCAN_INTERVAL,
+    DEFAULT_BOOT_TIMEOUT,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+)
 from .coordinator import MinerCoordinator
 
 PLATFORMS = [
@@ -29,7 +36,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         username=entry.data.get(CONF_USERNAME),
         password=password,
         scan_interval=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+        power_entity=entry.options.get(CONF_POWER_ENTITY) or None,
+        boot_timeout=entry.options.get(CONF_BOOT_TIMEOUT, DEFAULT_BOOT_TIMEOUT),
     )
+    await coordinator.async_setup_power_tracking()
+    entry.async_on_unload(coordinator._stop_power_tracking)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
