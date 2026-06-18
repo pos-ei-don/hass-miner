@@ -16,9 +16,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from pyasic_rs.data import MinerData
 
-from .const import DOMAIN
+from .const import (
+    CAT_MINER_SUMMARY,
+    CAT_SAFETY,
+    CONF_SENSOR_CATEGORIES,
+    DEFAULT_SENSOR_CATEGORIES,
+    DOMAIN,
+)
 from .coordinator import MinerCoordinator
-from .entity import MinerEntity
+from .entity import MinerEntity, async_remove_stale_entities
+from .sensor import _has_problem
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -27,6 +34,7 @@ class MinerBinarySensorDescription(BinarySensorEntityDescription):
     available_fn: Callable[[MinerData], bool] = lambda _: True
 
 
+# Miner-wide status flags (CAT_MINER_SUMMARY).
 BINARY_SENSORS: tuple[MinerBinarySensorDescription, ...] = (
     MinerBinarySensorDescription(
         key="is_mining",
@@ -39,6 +47,17 @@ BINARY_SENSORS: tuple[MinerBinarySensorDescription, ...] = (
         name="Fault Light",
         value_fn=lambda d: d.light_flashing,
         available_fn=lambda d: d.light_flashing is not None,
+    ),
+)
+
+# Safety (CAT_SAFETY): on when the miner reports its own Error/Warning state.
+# Defensive (B2): with no messages on stock 0.6.2, _has_problem -> False.
+SAFETY_BINARY_SENSORS: tuple[MinerBinarySensorDescription, ...] = (
+    MinerBinarySensorDescription(
+        key="safety_problem",
+        name="Safety Problem",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        value_fn=_has_problem,
     ),
 )
 
@@ -74,6 +93,24 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
+    data = coordinator.data
+
+    categories = set(
+        entry.options.get(CONF_SENSOR_CATEGORIES, DEFAULT_SENSOR_CATEGORIES)
+    )
+
+    descriptions: list[MinerBinarySensorDescription] = []
+    if CAT_MINER_SUMMARY in categories:
+        descriptions.extend(BINARY_SENSORS)
+    if CAT_SAFETY in categories:
+        descriptions.extend(SAFETY_BINARY_SENSORS)
+
+    device_uid = (
+        data.mac.replace(":", "").lower() if data and data.mac else coordinator.ip
+    )
+    keep = {f"{device_uid}_{d.key}" for d in descriptions}
+    async_remove_stale_entities(hass, entry, "binary_sensor", keep)
+
     async_add_entities(
-        MinerBinarySensorEntity(coordinator, desc) for desc in BINARY_SENSORS
+        MinerBinarySensorEntity(coordinator, desc) for desc in descriptions
     )
