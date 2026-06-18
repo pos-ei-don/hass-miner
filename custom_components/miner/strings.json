@@ -56,26 +56,29 @@
     "step": {
       "init": {
         "title": "Miner Options",
-        "description": "Firmware web password (VNish: needed for preset/throttle control) and how many sensors to create. Changing the sensor options reloads the integration.",
+        "description": "Tick which sensor categories to create. Unticking a category removes its entities on the next reload. Changing any option reloads the integration.",
         "data": {
           "password": "Password",
-          "sensor_detail_level": "Sensor detail level",
-          "only_available_sensors": "Only create available / type-relevant sensors"
+          "sensor_categories": "Sensor categories",
+          "only_available_sensors": "Only create type-relevant sensors",
+          "scan_interval": "Update interval (seconds)"
         },
         "data_description": {
-          "sensor_detail_level": "Summary = miner-wide aggregates only. Board summary = + reduced per-board set. Board individual = + full per-board set and fans. Debug = everything (use briefly, then switch back).",
-          "only_available_sensors": "Skip sensors with no value for this miner (e.g. fluid/water temperatures on air-cooled miners, fans on miners that report none). Ignored at Debug level."
+          "sensor_categories": "Tick the groups to create. Unticked groups are removed on reload.",
+          "only_available_sensors": "Skip sensors that don't apply to this miner (e.g. fluid/water temperatures on air-cooled miners, chip temperature where the firmware doesn't report it).",
+          "scan_interval": "How often to poll the miner. Lower = fresher data but more load on the miner (default 30 s)."
         }
       }
     }
   },
   "selector": {
-    "sensor_detail_level": {
+    "sensor_categories": {
       "options": {
-        "summary": "Summary (aggregates per miner)",
-        "board_summary": "Board summary (aggregated per board)",
-        "board_individual": "Board individual (per board)",
-        "debug": "Detail / Debug (everything)"
+        "miner_summary": "Miner summary (hashrate, power, J/TH, temps, uptime, pools)",
+        "safety": "Safety / diagnose (alarm + device limits)",
+        "board_temps": "Per-board temperatures (board / chip / intake / outlet)",
+        "board_perf": "Per-board performance (hashrate / voltage / frequency / chips)",
+        "fans": "Fans (RPM)"
       }
     }
   }

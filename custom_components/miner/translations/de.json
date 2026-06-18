@@ -56,26 +56,29 @@
     "step": {
       "init": {
         "title": "Miner-Optionen",
-        "description": "Firmware-Web-Passwort (VNish: für Preset-/Throttle-Steuerung nötig) und wie viele Sensoren angelegt werden. Eine Änderung der Sensor-Optionen lädt die Integration neu.",
+        "description": "Wähle aus, welche Sensor-Kategorien angelegt werden. Eine abgewählte Kategorie wird beim nächsten Neuladen entfernt. Jede Änderung lädt die Integration neu.",
         "data": {
           "password": "Passwort",
-          "sensor_detail_level": "Sensor-Detailgrad",
-          "only_available_sensors": "Nur verfügbare / typ-relevante Sensoren anlegen"
+          "sensor_categories": "Sensor-Kategorien",
+          "only_available_sensors": "Nur typ-relevante Sensoren anlegen",
+          "scan_interval": "Abfrageintervall (Sekunden)"
         },
         "data_description": {
-          "sensor_detail_level": "Summary = nur Miner-weite Aggregate. Board-Summary = + reduzierter Satz pro Board. Board-individual = + voller Satz pro Board und Lüfter. Debug = alles (kurz aktivieren, danach wieder zurückschalten).",
-          "only_available_sensors": "Sensoren ohne Wert für diesen Miner überspringen (z. B. Fluid-/Wasser-Temperaturen bei luftgekühlten Minern, Lüfter bei Minern, die keine melden). Wird im Debug-Modus ignoriert."
+          "sensor_categories": "Gewünschte Gruppen ankreuzen. Abgewählte Gruppen werden beim Neuladen entfernt.",
+          "only_available_sensors": "Sensoren überspringen, die für diesen Miner nicht zutreffen (z. B. Fluid-/Wasser-Temperaturen bei luftgekühlten Minern, Chip-Temperatur wenn die Firmware sie nicht meldet).",
+          "scan_interval": "Wie oft der Miner abgefragt wird. Niedriger = frischere Daten, aber mehr Last auf dem Miner (Default 30 s)."
         }
       }
     }
   },
   "selector": {
-    "sensor_detail_level": {
+    "sensor_categories": {
       "options": {
-        "summary": "Summary (Aggregate pro Miner)",
-        "board_summary": "Board-Summary (pro Board aggregiert)",
-        "board_individual": "Board-individual (pro Board einzeln)",
-        "debug": "Detail / Debug (alles)"
+        "miner_summary": "Miner-Summary (Hashrate, Leistung, J/TH, Temperaturen, Uptime, Pools)",
+        "safety": "Safety / Diagnose (Alarm + Geräte-Grenzen)",
+        "board_temps": "Pro-Board-Temperaturen (Board / Chip / Intake / Outlet)",
+        "board_perf": "Pro-Board-Leistung (Hashrate / Spannung / Frequenz / Chips)",
+        "fans": "Lüfter (RPM)"
       }
     }
   }

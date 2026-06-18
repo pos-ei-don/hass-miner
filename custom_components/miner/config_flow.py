@@ -14,6 +14,9 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -24,11 +27,15 @@ from pyasic_rs import MinerFactory
 
 from .const import (
     CONF_ONLY_AVAILABLE,
-    CONF_SENSOR_DETAIL,
+    CONF_SCAN_INTERVAL,
+    CONF_SENSOR_CATEGORIES,
     DEFAULT_ONLY_AVAILABLE,
-    DEFAULT_SENSOR_DETAIL,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SENSOR_CATEGORIES,
     DOMAIN,
-    SENSOR_DETAIL_LEVELS,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
+    SENSOR_CATEGORIES,
 )
 
 CONF_SUBNET = "subnet"
@@ -88,7 +95,7 @@ class AsicMinerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> "AsicMinerOptionsFlow":
+    def async_get_options_flow(config_entry: ConfigEntry) -> AsicMinerOptionsFlow:
         return AsicMinerOptionsFlow()
 
     def __init__(self) -> None:
@@ -235,17 +242,15 @@ class AsicMinerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class AsicMinerOptionsFlow(config_entries.OptionsFlow):
-    """Options flow — firmware web password + sensor verbosity.
-
-    Two concerns live here:
+    """Options flow — firmware web password, sensor categories, poll interval.
 
     * **Firmware web password** (BETA): needed so the VNish preset/throttle
-      controls can obtain an unlock token without re-adding the miner (which
-      would recreate all entities).
-    * **Sensor detail level + "only available sensors"**: the asic-rs model
-      emits a lot of per-board / type-specific sensors. These options gate which
-      entities are created (see ``sensor.py`` / ``binary_sensor.py``). Changing
-      them reloads the entry, so entities appear/disappear immediately.
+      controls can obtain an unlock token without re-adding the miner.
+    * **Sensor categories**: tick the groups of sensors to create. Unticking a
+      category removes its entities on reload (deterministic / boot-safe).
+    * **Only type-relevant sensors**: hide values that don't apply to this miner
+      (e.g. fluid temp on air-cooled, chip temp where the firmware doesn't report it).
+    * **Scan interval**: how often the miner is polled.
 
     Note: HA provides ``self.config_entry`` automatically; do not assign it
     (it is a read-only property in current HA).
@@ -261,19 +266,34 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
         current_password = options.get(
             CONF_PASSWORD, self.config_entry.data.get(CONF_PASSWORD, "")
         )
-        current_detail = options.get(CONF_SENSOR_DETAIL, DEFAULT_SENSOR_DETAIL)
+        current_categories = options.get(
+            CONF_SENSOR_CATEGORIES, DEFAULT_SENSOR_CATEGORIES
+        )
         current_only_available = options.get(
             CONF_ONLY_AVAILABLE, DEFAULT_ONLY_AVAILABLE
         )
+        current_scan_interval = options.get(
+            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+        )
 
-        detail_select = SelectSelector(
+        categories_select = SelectSelector(
             SelectSelectorConfig(
                 options=[
-                    SelectOptionDict(value=level, label=level)
-                    for level in SENSOR_DETAIL_LEVELS
+                    SelectOptionDict(value=cat, label=cat)
+                    for cat in SENSOR_CATEGORIES
                 ],
-                translation_key=CONF_SENSOR_DETAIL,
-                mode=SelectSelectorMode.DROPDOWN,
+                translation_key=CONF_SENSOR_CATEGORIES,
+                multiple=True,
+                mode=SelectSelectorMode.LIST,
+            )
+        )
+        scan_interval_select = NumberSelector(
+            NumberSelectorConfig(
+                min=MIN_SCAN_INTERVAL,
+                max=MAX_SCAN_INTERVAL,
+                step=1,
+                unit_of_measurement="s",
+                mode=NumberSelectorMode.BOX,
             )
         )
 
@@ -283,11 +303,14 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Optional(CONF_PASSWORD, default=current_password): str,
                     vol.Optional(
-                        CONF_SENSOR_DETAIL, default=current_detail
-                    ): detail_select,
+                        CONF_SENSOR_CATEGORIES, default=current_categories
+                    ): categories_select,
                     vol.Optional(
                         CONF_ONLY_AVAILABLE, default=current_only_available
                     ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_SCAN_INTERVAL, default=current_scan_interval
+                    ): scan_interval_select,
                 }
             ),
         )

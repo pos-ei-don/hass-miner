@@ -30,6 +30,7 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         ip: str,
         username: str | None = None,
         password: str | None = None,
+        scan_interval: int = DEFAULT_SCAN_INTERVAL,
     ) -> None:
         self.ip = ip
         self.username = username
@@ -45,7 +46,7 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             hass,
             _LOGGER,
             name=f"{DOMAIN}_{ip}",
-            update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+            update_interval=timedelta(seconds=scan_interval),
         )
 
     async def _async_setup(self) -> None:

@@ -22,6 +22,7 @@ Endpoints (base = http://{ip}/api/v1):
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 import aiohttp
@@ -127,9 +128,11 @@ async def fetch_current_preset(
 async def apply_preset(
     session: aiohttp.ClientSession, ip: str, pw: str | None, preset: str
 ) -> tuple[bool, str]:
-    """Apply an autotune preset by name. Ports the proven shim logic:
-    unlock -> GET /settings + /autotune/presets -> POST /settings with the
-    preset + its tune_settings -> restart mining if VNish requires it.
+    """Apply an autotune preset by name.
+
+    Ports the proven shim logic: unlock -> GET /settings + /autotune/presets ->
+    POST /settings with the preset + its tune_settings -> restart mining if
+    VNish requires it.
     """
     token = await _unlock(session, ip, pw)
     if not token:
@@ -184,10 +187,8 @@ async def apply_preset(
         ) as r:
             ok = r.status == 200
             body = {}
-            try:
+            with contextlib.suppress(Exception):
                 body = await r.json()
-            except Exception:  # noqa: BLE001
-                pass
         if ok and body.get("restart_required"):
             async with session.post(
                 f"{_base(ip)}/mining/restart", headers=h, timeout=_TIMEOUT
