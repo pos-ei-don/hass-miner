@@ -1,5 +1,36 @@
 # hass-miner
 
+> [!WARNING]
+> **This branch is an experimental fork — `pos-ei-don`'s asic-rs `2.0.0-alphaN` line.**
+> It is the [asic-rs rewrite](https://github.com/Schnitzel/hass-miner/pull/601) (by [@b-rowan](https://github.com/b-rowan)) **plus local adaptations**, run in production on real hardware (Antminer S19 Pro Hydro / VNish + S19k Pro / BraiinsOS). It is **not** the official `pyasic` release line and not on HACS — see *Installation (this fork)* below.
+
+## About this fork (asic-rs alpha)
+
+`pyasic` is deprecated; this line runs entirely on [256foundation/asic-rs](https://github.com/256foundation/asic-rs) (Rust) via a **VNish-patched wheel** built from [`pos-ei-don/asic-rs`](https://github.com/pos-ei-don/asic-rs).
+
+**What this fork adds on top of the upstream rewrite:**
+- 0.6.0 adaptations so the rewrite runs against current `pyasic-rs`: `const.DOMAIN` lowercase, `DeviceInfo` via `model_dump()`, `number.py` on `TuningTarget`/`tuning_target.watts` (NUMBER platform re-enabled).
+- An `OptionsFlow` to set the firmware web password post-setup (needed for the VNish unlock token).
+- Pinned to the fork wheel (`pos-ei-don/asic-rs` release `wheels-vnish-*`, `cp314` / `musllinux_1_2` — Home Assistant Core is Alpine/musl).
+
+**Upstream contributions from this work (in `256foundation/asic-rs`):**
+- #277 — VNish model alias + per-board water temps *(merged)*
+- #281 — weak `?` python features so firmwares actually gate in the build *(merged)*
+- #282 — serialize `Duration` as `timedelta`, not `float` *(open)*
+- #284 — implement `SetPowerLimit` for VNish (preset-based) *(open)*
+- #285 — add `BoardData.chip_temperature`, populated for VNish *(open)*
+
+### Installation (this fork)
+
+**Not via HACS** — the domain is `miner`, which collides with the official `hass-miner`. Install manually:
+1. Copy `custom_components/miner/` from this branch into your HA `config/custom_components/`.
+2. The pinned wheel in `manifest.json` is `cp314`/`musllinux_1_2`/`x86_64` (HA OS). On a same-version wheel swap, force-reinstall it in the core venv (`pip install --force-reinstall --no-deps <wheel-url>`) and restart HA.
+3. Add miners via the config flow; set the firmware web password via the integration's *Configure* (options) for VNish preset/throttle control.
+
+Releases of this line are tagged `v2.0.0-alphaN` on **this fork only** (the official `pyasic` line lives on the upstream repo).
+
+---
+
 [![GitHub Release][releases-shield]][releases]
 [![GitHub Activity][commits-shield]][commits]
 [![License][license-shield]](LICENSE)
