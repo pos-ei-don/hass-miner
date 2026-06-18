@@ -8,6 +8,18 @@
 
 `pyasic` is deprecated; this line runs entirely on [256foundation/asic-rs](https://github.com/256foundation/asic-rs) (Rust) via a **VNish-patched wheel** built from [`pos-ei-don/asic-rs`](https://github.com/pos-ei-don/asic-rs).
 
+> [!TIP]
+> **Want a stable version? Use `beta7` (pyasic).** The `pyasic`-based **`v1.3.9-beta7`** line is the proven, stable one and runs rock-solid here — huge thanks to [@Schnitzel](https://github.com/Schnitzel) for the original integration and to **tntvlad** for keeping the beta line maintained. It lives on the [`main`](https://github.com/pos-ei-don/hass-miner/tree/main) branch here (archived) and as release `v1.3.9-beta7`. This `asic-rs` line is **experimental** by comparison.
+
+### Why move to Rust (asic-rs)?
+
+- **`pyasic` is deprecated** — its author moved development to `asic-rs`, so the pyasic line is a dead end long-term, however stable it is today.
+- **Responsive, actively-maintained upstream** — asic-rs fixes land fast (our VNish hardware fix was merged within hours).
+- **Structurally more robust** — much of the beta line's effort went into working *around* pyasic fragility (coordinator freezes, transient-failure handling, sensors flapping to 0). A typed, async Rust core removes a whole class of those by construction.
+- **Faster / lighter** — no GIL, quicker scans and parsing, lower load on the HA host.
+
+Trade-off today: asic-rs is earlier-stage (fewer features wired, VNish writes were a stub — hence the patches in this fork). So: **beta7 for stability now, this line for where it's heading.**
+
 **What this fork adds on top of the upstream rewrite:**
 - 0.6.0 adaptations so the rewrite runs against current `pyasic-rs`: `const.DOMAIN` lowercase, `DeviceInfo` via `model_dump()`, `number.py` on `TuningTarget`/`tuning_target.watts` (NUMBER platform re-enabled).
 - An `OptionsFlow` to set the firmware web password post-setup (needed for the VNish unlock token).
