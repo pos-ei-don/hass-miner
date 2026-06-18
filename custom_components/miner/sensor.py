@@ -159,6 +159,14 @@ def _min_intake(data: MinerData) -> float | None:
     return min(temps) if temps else None
 
 
+def _max_outlet(data: MinerData) -> float | None:
+    """Warmest per-board outlet temperature (≈ coolant return on hydro miners)."""
+    temps = [
+        b.outlet_temperature for b in data.hashboards if b.outlet_temperature is not None
+    ]
+    return max(temps) if temps else None
+
+
 def _problem_messages(data: MinerData) -> list[str]:
     """Texts of the miner's own Error/Warning messages (its self-assessment)."""
     out: list[str] = []
@@ -266,6 +274,30 @@ MINER_SUMMARY_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
         value_fn=lambda d: d.fluid_temperature,
         available_fn=lambda d: d.fluid_temperature is not None,
     ),
+    # Coolant in/out aggregates across all boards (hydro only): coldest inlet and
+    # hottest outlet — the safety-relevant water extremes, without per-board entities.
+    MinerSensorEntityDescription(
+        key="water_inlet_min",
+        name="Water Inlet (min)",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        icon="mdi:waves-arrow-right",
+        value_fn=_min_intake,
+        available_fn=lambda d: _min_intake(d) is not None,
+    ),
+    MinerSensorEntityDescription(
+        key="water_outlet_max",
+        name="Water Outlet (max)",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        icon="mdi:waves-arrow-left",
+        value_fn=_max_outlet,
+        available_fn=lambda d: _max_outlet(d) is not None,
+    ),
     MinerSensorEntityDescription(
         key="wattage",
         name="Power Consumption",
@@ -325,7 +357,7 @@ MINER_SUMMARY_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
 )
 
 # Capability-gated members of Miner-Summary (only created where structurally valid).
-_SUMMARY_HYDRO_ONLY = ("fluid_temperature",)
+_SUMMARY_HYDRO_ONLY = ("fluid_temperature", "water_inlet_min", "water_outlet_max")
 
 
 # ── Safety / Diagnose ───────────────────────────────────────────────────────
