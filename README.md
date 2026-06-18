@@ -9,7 +9,7 @@
 `pyasic` is deprecated; this line runs entirely on [256foundation/asic-rs](https://github.com/256foundation/asic-rs) (Rust) via a **VNish-patched wheel** built from [`pos-ei-don/asic-rs`](https://github.com/pos-ei-don/asic-rs).
 
 > [!TIP]
-> **Want a stable version? Use `beta7` (pyasic).** The `pyasic`-based **`v1.3.9-beta7`** line is the proven, stable one and runs rock-solid here — huge thanks to [@Schnitzel](https://github.com/Schnitzel) for the original integration and to **tntvlad** for keeping the beta line maintained. It lives on the [`main`](https://github.com/pos-ei-don/hass-miner/tree/main) branch here (archived) and as release `v1.3.9-beta7`. This `asic-rs` line is **experimental** by comparison.
+> **Want a stable version? Use [`v1.3.9`](https://github.com/pos-ei-don/hass-miner/releases/tag/v1.3.9) (pyasic line).** It is the proven, production-stable line — the same code formerly tagged `v1.3.9-beta7`, now released as a clean stable version. Huge thanks to [@Schnitzel](https://github.com/Schnitzel) for the original integration and to **tntvlad** for maintaining it (also released as [`v1.3.9` on tntvlad/hass-miner](https://github.com/tntvlad/hass-miner/releases/tag/v1.3.9)). Its code lives on the [`main`](https://github.com/pos-ei-don/hass-miner/tree/main) branch here. This `asic-rs` line is **experimental** by comparison.
 
 ### Why move to Rust (asic-rs)?
 
