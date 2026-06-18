@@ -25,7 +25,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from pyasic_rs.data import BoardData, MinerData, HashRateUnit
 
-from .const import DOMAIN
+from .const import (
+    CONF_ONLY_AVAILABLE,
+    CONF_SENSOR_DETAIL,
+    DEFAULT_ONLY_AVAILABLE,
+    DEFAULT_SENSOR_DETAIL,
+    DETAIL_BOARD_INDIVIDUAL,
+    DETAIL_BOARD_SUMMARY,
+    DETAIL_DEBUG,
+    DOMAIN,
+)
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity
 
@@ -179,9 +188,16 @@ def _primary_pool_url(data: MinerData) -> str | None:
 # ── Per-board sensor factories ──────────────────────────────────────────────
 
 
-def _board_sensors(board: BoardData) -> list[MinerSensorEntityDescription]:
+# Keys (per board, with the ``board_{n}_`` prefix stripped) that make up the
+# reduced "board summary" set — the values most users actually watch per board.
+_BOARD_SUMMARY_KEYS = ("hashrate", "board_temperature", "chip_temperature")
+
+
+def _board_sensors(
+    board: BoardData, reduced: bool = False
+) -> list[MinerSensorEntityDescription]:
     n = board.position
-    return [
+    descriptions = [
         MinerSensorEntityDescription(
             key=f"board_{n}_hashrate",
             name=f"Board {n} Hashrate",
@@ -287,6 +303,10 @@ def _board_sensors(board: BoardData) -> list[MinerSensorEntityDescription]:
             ),
         ),
     ]
+    if reduced:
+        suffixes = tuple(f"board_{n}_{k}" for k in _BOARD_SUMMARY_KEYS)
+        descriptions = [d for d in descriptions if d.key in suffixes]
+    return descriptions
 
 
 def _board_value(
@@ -362,18 +382,34 @@ async def async_setup_entry(
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
     data = coordinator.data
 
+    detail = entry.options.get(CONF_SENSOR_DETAIL, DEFAULT_SENSOR_DETAIL)
+    only_available = entry.options.get(CONF_ONLY_AVAILABLE, DEFAULT_ONLY_AVAILABLE)
+    # Debug level shows everything, including currently-empty entities — so the
+    # availability gate is intentionally bypassed there.
+    gate_unavailable = only_available and detail != DETAIL_DEBUG
+
     descriptions: list[MinerSensorEntityDescription] = list(MINER_SENSORS)
 
-    # Add per-board sensors for each detected hashboard
-    for board in data.hashboards:
-        descriptions.extend(_board_sensors(board))
+    # Per-board sensors. ``summary`` keeps only the miner-wide aggregates above
+    # (e.g. average_temperature); the more verbose levels add per-board entities.
+    if detail in (DETAIL_BOARD_SUMMARY, DETAIL_BOARD_INDIVIDUAL, DETAIL_DEBUG):
+        reduced = detail == DETAIL_BOARD_SUMMARY
+        for board in data.hashboards:
+            descriptions.extend(_board_sensors(board, reduced=reduced))
 
-    # Add fan sensors
-    for fan in data.fans:
-        descriptions.append(_fan_sensor(fan.position, psu=False))
+    # Fan sensors are per-board-individual / debug only (and only created when
+    # the miner actually reports fans — see the availability gate below).
+    if detail in (DETAIL_BOARD_INDIVIDUAL, DETAIL_DEBUG):
+        for fan in data.fans:
+            descriptions.append(_fan_sensor(fan.position, psu=False))
+        for fan in data.psu_fans:
+            descriptions.append(_fan_sensor(fan.position, psu=True))
 
-    # Add PSU fan sensors
-    for fan in data.psu_fans:
-        descriptions.append(_fan_sensor(fan.position, psu=True))
+    # "Only available / type-relevant sensors": skip entities whose value is
+    # None/absent for THIS miner. This is what drops the hydro-only fluid/water
+    # temperatures on air-cooled miners and the empty per-board sensors on an
+    # offline miner, without any per-type special-casing.
+    if gate_unavailable:
+        descriptions = [d for d in descriptions if d.available_fn(data)]
 
     async_add_entities(MinerSensorEntity(coordinator, desc) for desc in descriptions)

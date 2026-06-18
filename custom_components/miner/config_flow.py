@@ -12,10 +12,24 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from pyasic_rs import MinerFactory
 
-from .const import DOMAIN
+from .const import (
+    CONF_ONLY_AVAILABLE,
+    CONF_SENSOR_DETAIL,
+    DEFAULT_ONLY_AVAILABLE,
+    DEFAULT_SENSOR_DETAIL,
+    DOMAIN,
+    SENSOR_DETAIL_LEVELS,
+)
 
 CONF_SUBNET = "subnet"
 CONF_SELECTED_MINER = "selected_miner"
@@ -221,10 +235,17 @@ class AsicMinerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class AsicMinerOptionsFlow(config_entries.OptionsFlow):
-    """Options flow — set/update the firmware web password post-setup.
+    """Options flow — firmware web password + sensor verbosity.
 
-    BETA: needed so the VNish preset/throttle controls can obtain an unlock
-    token without re-adding the miner (which would recreate all entities).
+    Two concerns live here:
+
+    * **Firmware web password** (BETA): needed so the VNish preset/throttle
+      controls can obtain an unlock token without re-adding the miner (which
+      would recreate all entities).
+    * **Sensor detail level + "only available sensors"**: the asic-rs model
+      emits a lot of per-board / type-specific sensors. These options gate which
+      entities are created (see ``sensor.py`` / ``binary_sensor.py``). Changing
+      them reloads the entry, so entities appear/disappear immediately.
 
     Note: HA provides ``self.config_entry`` automatically; do not assign it
     (it is a read-only property in current HA).
@@ -232,14 +253,41 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None) -> FlowResult:
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            # Merge over existing options so unrelated keys are preserved.
+            data = {**self.config_entry.options, **user_input}
+            return self.async_create_entry(title="", data=data)
 
-        current = self.config_entry.options.get(
+        options = self.config_entry.options
+        current_password = options.get(
             CONF_PASSWORD, self.config_entry.data.get(CONF_PASSWORD, "")
         )
+        current_detail = options.get(CONF_SENSOR_DETAIL, DEFAULT_SENSOR_DETAIL)
+        current_only_available = options.get(
+            CONF_ONLY_AVAILABLE, DEFAULT_ONLY_AVAILABLE
+        )
+
+        detail_select = SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(value=level, label=level)
+                    for level in SENSOR_DETAIL_LEVELS
+                ],
+                translation_key=CONF_SENSOR_DETAIL,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        )
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
-                {vol.Optional(CONF_PASSWORD, default=current): str}
+                {
+                    vol.Optional(CONF_PASSWORD, default=current_password): str,
+                    vol.Optional(
+                        CONF_SENSOR_DETAIL, default=current_detail
+                    ): detail_select,
+                    vol.Optional(
+                        CONF_ONLY_AVAILABLE, default=current_only_available
+                    ): BooleanSelector(),
+                }
             ),
         )

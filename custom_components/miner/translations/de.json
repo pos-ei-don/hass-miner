@@ -1,0 +1,82 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "menu_options": {
+          "manual": "IP-Adresse manuell eingeben",
+          "scan": "Netzwerk nach Minern durchsuchen"
+        }
+      },
+      "manual": {
+        "title": "ASIC-Miner hinzufügen",
+        "description": "Gib die IP-Adresse deines ASIC-Miners ein.",
+        "data": {
+          "host": "IP-Adresse",
+          "username": "Benutzername (optional)",
+          "password": "Passwort (optional)"
+        }
+      },
+      "scan": {
+        "title": "Netzwerk durchsuchen",
+        "description": "Gib das zu durchsuchende Subnetz ein. Es wurde aus deinen Netzwerkeinstellungen vorausgefüllt.",
+        "data": {
+          "subnet": "Subnetz (z. B. 192.168.1.0/24)"
+        }
+      },
+      "scanning": {
+        "title": "Suche läuft …",
+        "description": "{subnet} wird nach ASIC-Minern durchsucht. Das kann bis zu 30 Sekunden dauern."
+      },
+      "pick_miner": {
+        "title": "Miner auswählen",
+        "description": "Wähle einen Miner aus der Liste der im Netzwerk gefundenen Geräte.",
+        "data": {
+          "selected_miner": "Miner"
+        }
+      },
+      "credentials": {
+        "title": "Zugangsdaten",
+        "description": "Gib die Anmeldedaten für {host} ein oder lass die Felder leer, falls keine Authentifizierung nötig ist.",
+        "data": {
+          "username": "Benutzername (optional)",
+          "password": "Passwort (optional)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen. Prüfe die IP-Adresse und ob der Miner online ist.",
+      "no_miners_found": "In diesem Subnetz wurden keine Miner gefunden. Versuche einen anderen Bereich.",
+      "unknown": "Unerwarteter Fehler. Prüfe die Home-Assistant-Logs."
+    },
+    "abort": {
+      "already_configured": "Dieser Miner ist bereits konfiguriert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Miner-Optionen",
+        "description": "Firmware-Web-Passwort (VNish: für Preset-/Throttle-Steuerung nötig) und wie viele Sensoren angelegt werden. Eine Änderung der Sensor-Optionen lädt die Integration neu.",
+        "data": {
+          "password": "Passwort",
+          "sensor_detail_level": "Sensor-Detailgrad",
+          "only_available_sensors": "Nur verfügbare / typ-relevante Sensoren anlegen"
+        },
+        "data_description": {
+          "sensor_detail_level": "Summary = nur Miner-weite Aggregate. Board-Summary = + reduzierter Satz pro Board. Board-individual = + voller Satz pro Board und Lüfter. Debug = alles (kurz aktivieren, danach wieder zurückschalten).",
+          "only_available_sensors": "Sensoren ohne Wert für diesen Miner überspringen (z. B. Fluid-/Wasser-Temperaturen bei luftgekühlten Minern, Lüfter bei Minern, die keine melden). Wird im Debug-Modus ignoriert."
+        }
+      }
+    }
+  },
+  "selector": {
+    "sensor_detail_level": {
+      "options": {
+        "summary": "Summary (Aggregate pro Miner)",
+        "board_summary": "Board-Summary (pro Board aggregiert)",
+        "board_individual": "Board-individual (pro Board einzeln)",
+        "debug": "Detail / Debug (alles)"
+      }
+    }
+  }
+}

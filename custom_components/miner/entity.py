@@ -13,6 +13,12 @@ from .coordinator import MinerCoordinator
 class MinerEntity(CoordinatorEntity[MinerCoordinator]):
     """Base class for all ASIC Miner entities."""
 
+    # TODO(entity-ids): generated entity_ids are very long and double-prefixed
+    # with the device name, e.g.
+    #   sensor.antminer_3_dry2_s19k_pro_antminer_s19kpro_board_1_chip_temperature
+    # because both the device name and the entity name carry the make/model.
+    # Shortening would change existing entity_ids (migration risk), so it is left
+    # as a follow-up rather than fixed here. See PR discussion.
     _attr_has_entity_name = True
 
     def __init__(self, coordinator: MinerCoordinator) -> None:

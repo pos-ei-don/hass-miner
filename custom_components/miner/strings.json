@@ -56,10 +56,26 @@
     "step": {
       "init": {
         "title": "Miner Options",
-        "description": "Set the firmware web password (VNish: needed for preset/throttle control). Leave blank if not required.",
+        "description": "Firmware web password (VNish: needed for preset/throttle control) and how many sensors to create. Changing the sensor options reloads the integration.",
         "data": {
-          "password": "Password"
+          "password": "Password",
+          "sensor_detail_level": "Sensor detail level",
+          "only_available_sensors": "Only create available / type-relevant sensors"
+        },
+        "data_description": {
+          "sensor_detail_level": "Summary = miner-wide aggregates only. Board summary = + reduced per-board set. Board individual = + full per-board set and fans. Debug = everything (use briefly, then switch back).",
+          "only_available_sensors": "Skip sensors with no value for this miner (e.g. fluid/water temperatures on air-cooled miners, fans on miners that report none). Ignored at Debug level."
         }
+      }
+    }
+  },
+  "selector": {
+    "sensor_detail_level": {
+      "options": {
+        "summary": "Summary (aggregates per miner)",
+        "board_summary": "Board summary (aggregated per board)",
+        "board_individual": "Board individual (per board)",
+        "debug": "Detail / Debug (everything)"
       }
     }
   }
