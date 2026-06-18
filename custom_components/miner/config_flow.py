@@ -264,6 +264,11 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             # Merge over existing options so unrelated keys are preserved.
             data = {**self.config_entry.options, **user_input}
+            # An empty/unselected power entity must DISABLE power-aware polling,
+            # not silently keep a previously-set value (the merge would otherwise
+            # preserve it). Treat empty/absent as "cleared".
+            if not user_input.get(CONF_POWER_ENTITY):
+                data.pop(CONF_POWER_ENTITY, None)
             return self.async_create_entry(title="", data=data)
 
         options = self.config_entry.options

@@ -147,15 +147,19 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         try:
             data = await self.miner.get_data()
         except Exception as err:
-            # While booting, latch the alarm once the boot timeout has elapsed,
-            # but keep fast-retrying (booting stays True) until the miner answers.
+            # While booting, latch the alarm once the boot timeout has elapsed.
             if (
                 self.booting
+                and not self.boot_failed
                 and self._power_on_since is not None
                 and (dt_util.utcnow() - self._power_on_since).total_seconds()
                 > self.boot_timeout
             ):
+                # Boot timed out: latch the alarm and stop hammering at the fast
+                # cadence — fall back to the normal interval. booting stays True
+                # so a later success still clears the alarm and recovers.
                 self.boot_failed = True
+                self.update_interval = timedelta(seconds=self._scan_interval)
             raise UpdateFailed(
                 f"Error communicating with miner at {self.ip}: {err}"
             ) from err
