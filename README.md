@@ -2,7 +2,7 @@
 
 > [!WARNING]
 > **This branch is an experimental fork — `pos-ei-don`'s asic-rs `2.0.0-alphaN` line.**
-> It is the [asic-rs rewrite](https://github.com/Schnitzel/hass-miner/pull/601) (by [@b-rowan](https://github.com/b-rowan)) **plus local adaptations**, run in production on real hardware (Antminer S19 Pro Hydro / VNish + S19k Pro / BraiinsOS). It is **not** the official `pyasic` release line and not on HACS — see *Installation (this fork)* below.
+> It is the [asic-rs rewrite](https://github.com/Schnitzel/hass-miner/pull/601) (by [@b-rowan](https://github.com/b-rowan)) **plus local adaptations**, run in production on real hardware (Antminer S19 Pro Hydro / VNish + S19k Pro / BraiinsOS). It is **not** the official `pyasic` release line — see *Installation (this fork)* below.
 
 ## About this fork (asic-rs alpha)
 
@@ -34,10 +34,19 @@ Trade-off today: asic-rs is earlier-stage (fewer features wired, VNish writes we
 
 ### Installation (this fork)
 
-**Not via HACS** — the domain is `miner`, which collides with the official `hass-miner`. Install manually:
-1. Copy `custom_components/miner/` from this branch into your HA `config/custom_components/`.
-2. The pinned wheel in `manifest.json` is `cp314`/`musllinux_1_2`/`x86_64` (HA OS). On a same-version wheel swap, force-reinstall it in the core venv (`pip install --force-reinstall --no-deps <wheel-url>`) and restart HA.
-3. Add miners via the config flow; set the firmware web password via the integration's *Configure* (options) for VNish preset/throttle control.
+**Via HACS (custom repository):**
+
+[![Add repository to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=pos-ei-don&repository=hass-miner&category=integration)
+
+1. Click the button above (or in HACS: ⋮ → *Custom repositories* → `https://github.com/pos-ei-don/hass-miner`, category **Integration**).
+2. Open the entry → ⋮ → enable **Show beta versions** (releases are `alpha` prereleases) → **Download** `v2.0.0-alphaN`.
+3. **Restart Home Assistant** — HACS copies the integration and HA installs the pinned wheel (`cp314`/`musllinux_1_2`, HA OS) from `manifest.json` automatically.
+4. Add miners via the config flow; set the firmware web password via the integration's *Configure* (options) for VNish preset/throttle control.
+
+> [!IMPORTANT]
+> The domain is `miner` — there can only be one `custom_components/miner`. **Remove the official `hass-miner` / beta7 from HACS first**, then add this one. (This also fully decouples you from the beta7 line.)
+
+**Manual (alternative):** copy `custom_components/miner/` into `config/custom_components/`; on a *same-version* wheel swap, force-reinstall it in the core venv (`pip install --force-reinstall --no-deps <wheel-url>`) and restart.
 
 Releases of this line are tagged `v2.0.0-alphaN` on **this fork only** (the official `pyasic` line lives on the upstream repo).
 
