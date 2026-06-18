@@ -1,5 +1,6 @@
 {
-  "name": "miner",
+  "name": "ASIC Miner (asic-rs alpha — pos-ei-don fork)",
   "hacs": "1.6.0",
-  "homeassistant": "0.118.0"
+  "homeassistant": "2026.1.0",
+  "render_readme": true
 }
