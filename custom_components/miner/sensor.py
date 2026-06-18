@@ -48,6 +48,39 @@ UNIT_RPM = "RPM"
 # Severities (from asic-rs MessageSeverity) that count as an active alarm.
 _PROBLEM_SEVERITIES = ("Error", "Warning")
 
+# Icons for sensors that otherwise fall back to HA's generic ``mdi:eye``
+# (i.e. those without a device_class). Keyed by exact key; per-board/fan keys are
+# matched by suffix. device_class sensors (temperature/power/…) keep their nice
+# default icon unless overridden here.
+_ICONS: dict[str, str] = {
+    "hashrate": "mdi:pickaxe",
+    "expected_hashrate": "mdi:pickaxe",
+    "efficiency": "mdi:gauge",
+    "total_chips": "mdi:chip",
+    "pool_accepted_shares": "mdi:check-network-outline",
+    "pool_rejected_shares": "mdi:close-network-outline",
+    "pool_url": "mdi:server-network",
+    "max_temperature": "mdi:thermometer-high",
+    "fluid_temperature": "mdi:coolant-temperature",
+    "safety_alarm_reason": "mdi:shield-alert-outline",
+    "safety_cold_limit": "mdi:thermometer-low",
+    "safety_hot_limit": "mdi:thermometer-alert",
+}
+_ICON_SUFFIXES: dict[str, str] = {
+    "_hashrate": "mdi:pickaxe",
+    "_working_chips": "mdi:chip",
+    "_rpm": "mdi:fan",
+}
+
+
+def _icon_for(key: str) -> str | None:
+    if key in _ICONS:
+        return _ICONS[key]
+    for suffix, icon in _ICON_SUFFIXES.items():
+        if key.endswith(suffix):
+            return icon
+    return None
+
 
 @dataclass(frozen=True, kw_only=True)
 class MinerSensorEntityDescription(SensorEntityDescription):
@@ -466,6 +499,10 @@ class MinerSensorEntity(MinerEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{self._device_unique_id}_{description.key}"
+        if description.icon is None:
+            icon = _icon_for(description.key)
+            if icon is not None:
+                self._attr_icon = icon
 
     @property
     def native_value(self) -> Any:

@@ -45,6 +45,7 @@ SUMMARY_BINARY_SENSORS: tuple[MinerBinarySensorDescription, ...] = (
     MinerBinarySensorDescription(
         key="light_flashing",
         name="Fault Light",
+        icon="mdi:alarm-light-outline",
         value_fn=lambda d: d.light_flashing,
         available_fn=lambda d: d.light_flashing is not None,
     ),
