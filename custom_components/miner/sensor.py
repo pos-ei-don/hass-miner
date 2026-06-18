@@ -290,6 +290,17 @@ MINER_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
         available_fn=lambda d: d.average_temperature is not None,
     ),
     MinerSensorEntityDescription(
+        key="max_temperature",
+        name="Max Temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        icon="mdi:thermometer-alert",
+        value_fn=_max_temperature,
+        available_fn=lambda d: _max_temperature(d) is not None,
+    ),
+    MinerSensorEntityDescription(
         key="fluid_temperature",
         name="Fluid Temperature",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -393,6 +404,32 @@ SAFETY_REASON = MinerSensorEntityDescription(
     icon="mdi:shield-alert",
     value_fn=_alarm_reason,
     available_fn=lambda _: True,
+)
+
+# The device's OWN configured thermal limits, surfaced as diagnostics so the
+# alarm's comparison values are visible. Schicht B: read defensively, so they
+# only appear when the lib exposes them (dormant on stock 0.6.2).
+SAFETY_LIMIT_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
+    MinerSensorEntityDescription(
+        key="safety_cold_limit",
+        name="Safety Cold Limit",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:thermometer-low",
+        value_fn=lambda d: getattr(d, "min_startup_temperature", None),
+        available_fn=lambda d: getattr(d, "min_startup_temperature", None) is not None,
+    ),
+    MinerSensorEntityDescription(
+        key="safety_hot_limit",
+        name="Safety Hot Limit",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:thermometer-high",
+        value_fn=lambda d: getattr(d, "restart_temperature", None),
+        available_fn=lambda d: getattr(d, "restart_temperature", None) is not None,
+    ),
 )
 
 
@@ -598,6 +635,7 @@ async def async_setup_entry(
     # Safety / diagnose: the alarm reason text (always meaningful, "OK" by default).
     if CAT_SAFETY in categories:
         descriptions.append(SAFETY_REASON)
+        descriptions.extend(SAFETY_LIMIT_SENSORS)
 
     # Per-board sensors, matched to the live hashboards by position.
     if CAT_BOARD_TEMPS in categories or CAT_BOARD_PERF in categories:
