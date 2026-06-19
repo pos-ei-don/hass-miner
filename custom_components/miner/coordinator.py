@@ -96,7 +96,12 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         if not self.power_entity:
             return
         state = self.hass.states.get(self.power_entity)
-        self.power_on = state is not None and state.state == "on"
+        # Only an explicit "off" suppresses polling. At HA startup the power
+        # entity's integration may not have loaded yet (state None / "unknown" /
+        # "unavailable"); treating that as off would wrongly suppress a running
+        # miner for the whole session. Default to powered-on in the ambiguous
+        # case — it self-corrects on the next state change.
+        self.power_on = state is None or state.state != "off"
         self._power_unsub = async_track_state_change_event(
             self.hass, [self.power_entity], self._handle_power_event
         )
@@ -111,7 +116,12 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
     @callback
     def _handle_power_event(self, event) -> None:
         new = event.data.get("new_state")
-        on = new is not None and new.state == "on"
+        # Ignore transient/unknown states: only explicit on/off flips the power
+        # state. A power entity briefly going "unavailable" (its integration
+        # reloading) must not be read as powered-off and stop a running miner.
+        if new is None or new.state in ("unavailable", "unknown"):
+            return
+        on = new.state == "on"
 
         if on and not self.power_on:
             # OFF → ON: begin the fast boot loop and poll immediately.

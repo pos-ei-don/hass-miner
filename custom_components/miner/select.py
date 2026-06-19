@@ -7,6 +7,8 @@ Replace with the native miner method once asic-rs supports VNish writes.
 
 from __future__ import annotations
 
+import re
+
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -35,11 +37,21 @@ class VnishPresetSelect(MinerEntity, SelectEntity):
         return self.coordinator.vnish_preset_labels.get(name, name)
 
     def _name_for(self, label: str) -> str:
-        """Map a displayed label back to the canonical preset name VNish expects."""
+        """Map a displayed label back to the canonical preset name VNish expects.
+
+        Prefer the exact label→name map; fall back to pulling the leading watt
+        number straight out of the label (VNish preset names are the bare number,
+        e.g. ``3495 W ~ 132 TH`` → ``3495``) so selection still resolves even if
+        the label map is stale or empty (e.g. offline). A label with no number
+        (``Disabled``) is returned lowercased to match the ``disabled`` preset.
+        """
         for name, lbl in self.coordinator.vnish_preset_labels.items():
             if lbl == label:
                 return name
-        return label  # fall back to treating the option as a bare name
+        m = re.match(r"\s*(\d+)", label)
+        if m:
+            return m.group(1)
+        return label.strip().lower()
 
     @property
     def options(self) -> list[str]:
