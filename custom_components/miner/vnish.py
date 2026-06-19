@@ -71,24 +71,73 @@ async def _unlock(session: aiohttp.ClientSession, ip: str, pw: str | None) -> st
     return body.get("token")
 
 
-async def fetch_throttle(session: aiohttp.ClientSession, ip: str) -> int | None:
-    """Read the current throttle percent (unauth). 100 == unthrottled."""
+async def _fetch_summary_miner(
+    session: aiohttp.ClientSession, ip: str
+) -> dict | None:
+    """GET /summary and return its ``miner`` object (unauth). None on failure."""
     try:
         async with session.get(f"{_base(ip)}/summary", timeout=_TIMEOUT) as resp:
-            m = (await resp.json()).get("miner", {})
+            return (await resp.json()).get("miner", {}) or {}
     except Exception:  # noqa: BLE001
         return None
-    val = m.get("miner_status", {}).get("throttled", m.get("throttled"))
+
+
+def _parse_throttle(miner: dict) -> int | None:
+    val = miner.get("miner_status", {}).get("throttled", miner.get("throttled"))
     try:
         return int(val) if val is not None else None
     except (TypeError, ValueError):
         return None
 
 
+async def fetch_status(
+    session: aiohttp.ClientSession, ip: str
+) -> tuple[int | None, str | None]:
+    """Read ``(throttle_percent, miner_state)`` from /summary in one call (unauth).
+
+    ``throttle`` is 100 when unthrottled. ``miner_state`` is VNish's own verdict
+    (e.g. ``mining`` / ``tuning`` / ``initializing`` / ``stopped``), used to
+    surface a friendly "tuning in progress" note without a second request.
+    """
+    miner = await _fetch_summary_miner(session, ip)
+    if miner is None:
+        return (None, None)
+    state = miner.get("miner_status", {}).get("miner_state")
+    return (_parse_throttle(miner), str(state) if state is not None else None)
+
+
+async def fetch_throttle(session: aiohttp.ClientSession, ip: str) -> int | None:
+    """Read the current throttle percent (unauth). 100 == unthrottled."""
+    throttle, _ = await fetch_status(session, ip)
+    return throttle
+
+
+def preset_label(name: str, pretty: str | None, status: str | None) -> str:
+    """Human-readable Select label for a preset option.
+
+    Tuned presets show the firmware's ``pretty`` string with its hashrate
+    estimate (``3495 watt ~ 132 TH`` → ``3495 W ~ 132 TH``); un-tuned numeric
+    presets are marked (``5725 W (untuned)``) so it is clear that selecting one
+    kicks off a tuning cycle first. Non-numeric presets (e.g. ``disabled``) keep
+    their ``pretty``/name as-is.
+    """
+    raw = str(name).strip()
+    if not raw.lstrip("-").isdigit():
+        return (pretty or raw).strip() or raw
+    if (status or "").lower() == "tuned" and pretty:
+        return " ".join(pretty.replace("watt", "W").split())
+    return f"{raw} W (untuned)"
+
+
 async def fetch_presets(
     session: aiohttp.ClientSession, ip: str, pw: str | None
-) -> list[str]:
-    """Read the available autotune preset names (auth). [] on failure."""
+) -> list[dict]:
+    """Read the available autotune presets (auth).
+
+    Returns a list of ``{"name", "pretty", "status"}`` dicts (order preserved),
+    or ``[]`` on failure. The name is the canonical value VNish expects; pretty
+    and status drive the Select label via :func:`preset_label`.
+    """
     token = await _unlock(session, ip, pw)
     if not token:
         return []
@@ -102,8 +151,15 @@ async def fetch_presets(
     except Exception:  # noqa: BLE001
         return []
     plist = presets if isinstance(presets, list) else presets.get("presets", [])
-    names = [p.get("name") for p in plist if isinstance(p, dict) and p.get("name")]
-    return names
+    return [
+        {
+            "name": p["name"],
+            "pretty": p.get("pretty"),
+            "status": p.get("status"),
+        }
+        for p in plist
+        if isinstance(p, dict) and p.get("name")
+    ]
 
 
 async def fetch_current_preset(

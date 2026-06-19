@@ -58,8 +58,14 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         # BETA VNish control state (populated only for VNish miners).
         self.is_vnish: bool = False
         self.vnish_presets: list[str] = []
+        # name -> human Select label (tuned hashrate / "(untuned)" marker).
+        self.vnish_preset_labels: dict[str, str] = {}
         self.vnish_preset: str | None = None
         self.vnish_throttle: int | None = None
+        # VNish's own state verdict (mining / tuning / initializing / stopped …),
+        # polled from /summary alongside the throttle. Lets the safety-reason
+        # sensor say "tuning in progress" instead of a bare "OK".
+        self.vnish_state: str | None = None
 
         # ── Power-aware polling state ──────────────────────────────────────
         # When no power_entity is configured, power_on stays True forever and
@@ -236,12 +242,21 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         # BETA: detect VNish firmware so the preset/throttle entities get added.
         session = async_get_clientsession(self.hass)
         self.is_vnish = await vnish.detect_vnish(session, self.ip)
+        detailed: list[dict] = []
         if self.is_vnish and self.password:
-            self.vnish_presets = await vnish.fetch_presets(
-                session, self.ip, self.password
-            )
-        if self.is_vnish and not self.vnish_presets:
-            self.vnish_presets = list(vnish.FALLBACK_PRESETS)
+            detailed = await vnish.fetch_presets(session, self.ip, self.password)
+        if self.is_vnish and not detailed:
+            # No live list (no password / fetch failed): fall back to bare names,
+            # no tuned/un-tuned label info available offline.
+            detailed = [{"name": n} for n in vnish.FALLBACK_PRESETS]
+        if self.is_vnish:
+            self.vnish_presets = [p["name"] for p in detailed]
+            self.vnish_preset_labels = {
+                p["name"]: vnish.preset_label(
+                    p["name"], p.get("pretty"), p.get("status")
+                )
+                for p in detailed
+            }
 
     async def _async_update_data(self) -> MinerData:
         if self.power_entity and not self.power_on:
@@ -287,7 +302,9 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         """BETA: refresh VNish preset/throttle. Never fails the main update."""
         session = async_get_clientsession(self.hass)
         try:
-            self.vnish_throttle = await vnish.fetch_throttle(session, self.ip)
+            self.vnish_throttle, self.vnish_state = await vnish.fetch_status(
+                session, self.ip
+            )
             if self.password:
                 self.vnish_preset = await vnish.fetch_current_preset(
                     session, self.ip, self.password

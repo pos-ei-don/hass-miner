@@ -29,24 +29,40 @@ class VnishPresetSelect(MinerEntity, SelectEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._device_unique_id}_vnish_preset"
 
+    def _label_for(self, name: str | None) -> str | None:
+        if name is None:
+            return None
+        return self.coordinator.vnish_preset_labels.get(name, name)
+
+    def _name_for(self, label: str) -> str:
+        """Map a displayed label back to the canonical preset name VNish expects."""
+        for name, lbl in self.coordinator.vnish_preset_labels.items():
+            if lbl == label:
+                return name
+        return label  # fall back to treating the option as a bare name
+
     @property
     def options(self) -> list[str]:
-        return self.coordinator.vnish_presets or list(vnish.FALLBACK_PRESETS)
+        names = self.coordinator.vnish_presets or list(vnish.FALLBACK_PRESETS)
+        return [self._label_for(n) for n in names]
 
     @property
     def current_option(self) -> str | None:
-        return self.coordinator.vnish_preset
+        return self._label_for(self.coordinator.vnish_preset)
 
     async def async_select_option(self, option: str) -> None:
+        # ``option`` is the display label (e.g. "3495 W ~ 132 TH"); the VNish API
+        # needs the bare preset name ("3495").
+        name = self._name_for(option)
         session = async_get_clientsession(self.hass)
         ok, msg = await vnish.apply_preset(
-            session, self.coordinator.ip, self.coordinator.password, option
+            session, self.coordinator.ip, self.coordinator.password, name
         )
         if ok:
-            self.coordinator.vnish_preset = option
+            self.coordinator.vnish_preset = name
             self.async_write_ha_state()
         else:
-            raise RuntimeError(f"VNish preset '{option}' failed: {msg}")
+            raise RuntimeError(f"VNish preset '{name}' failed: {msg}")
         await self.coordinator.async_request_refresh()
 
 

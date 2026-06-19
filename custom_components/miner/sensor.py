@@ -600,7 +600,14 @@ class MinerSafetyReasonSensor(MinerEntity, SensorEntity):
                     return f"{boot_msg}; {reason}"
             return boot_msg
         if data is not None:
-            return _alarm_reason(data)
+            reason = _alarm_reason(data)
+            # VNish treats tuning as a normal state (no message → reason "OK"),
+            # but surfacing it as info explains why hashrate is ramping/variable.
+            if reason == "OK":
+                state = (coordinator.vnish_state or "").lower()
+                if state in ("tuning", "auto-tuning", "auto_tuning"):
+                    return "tuning in progress"
+            return reason
         # No data and not a boot failure: distinguish "powered off" from a plain
         # communication outage so the reason text is meaningful while offline.
         if coordinator.power_entity and not coordinator.power_on:
