@@ -16,7 +16,7 @@ from pyasic_rs import MinerFactory
 from pyasic_rs.data import HashRateUnit, MinerData
 from pyasic_rs.miner import Miner
 
-from . import vnish
+from . import bos, vnish
 from .const import BOOT_POLL_INTERVAL, DEFAULT_BOOT_TIMEOUT, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .efficiency import EfficiencySampler, EfficiencyStore
 
@@ -86,6 +86,8 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         # GUI-set power limit (misc.power_limit) → caps the offered presets.
         self.vnish_power_limit: int | None = None
         self.vnish_power_limit_enabled: bool = False
+        # BOS power config (current/step/min) for set_power_limit miners.
+        self.bos_power_config: dict = {}
 
         # ── Power-aware polling state ──────────────────────────────────────
         # When no power_entity is configured, power_on stays True forever and
@@ -292,6 +294,12 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
                     self.vnish_power_limit,
                     self.vnish_power_limit_enabled,
                 ) = await vnish.fetch_power_limit(session, self.ip, self.password)
+        elif self.miner is not None and getattr(
+            self.miner, "supports_set_power_limit", False
+        ):
+            # Non-VNish set_power_limit miner (BOS/Braiins): read the real power
+            # range (current/step/min) from the device. Harmless no-op if not BOS.
+            self.bos_power_config = await bos.fetch_power_config(session, self.ip)
 
         if not self._eff_loaded:
             await self.efficiency.async_load()

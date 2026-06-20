@@ -21,8 +21,12 @@ STORAGE_VERSION = 1
 
 # EMA weight for the newest stable sample (recent-weighted → tracks drift).
 EMA_ALPHA = 0.3
-# A level must run stably this long before a sample is recorded.
+# A level must run stably this long before an EMA-refining sample is recorded.
 DWELL_SECONDS = 900  # 15 min
+# First *provisional* value is seeded after this short stable window (so labels
+# aren't empty at the start; the device's own efficiency is taken over and then
+# refined by EMA as BOS keeps fine-tuning).
+SEED_SECONDS = 120  # 2 min
 # Max relative hashrate spread within the dwell window to count as "stable".
 STABLE_TOLERANCE = 0.03  # ±3 %
 
@@ -121,6 +125,7 @@ class EfficiencySampler:
         self._since = None
         self._hr_lo = None
         self._hr_hi = None
+        self._seeded = False
 
     @property
     def active_key(self):
@@ -130,30 +135,45 @@ class EfficiencySampler:
     def observe(self, *, key, hashrate, efficiency, mining, tuning) -> None:
         try:
             now = dt_util.utcnow()
-            if key is None or not mining or tuning or not hashrate:
+            if key is None or not mining or tuning or not hashrate or not efficiency:
                 self._key = None
                 self._since = None
                 return
             if key != self._key:
-                # level changed → start a fresh dwell window
+                # level changed → start a fresh window
                 self._key = key
                 self._since = now
                 self._hr_lo = self._hr_hi = hashrate
+                self._seeded = False
                 return
             # same level: track hashrate spread for the stability check
             self._hr_lo = min(self._hr_lo, hashrate)
             self._hr_hi = max(self._hr_hi, hashrate)
-            if (now - self._since).total_seconds() < DWELL_SECONDS:
+            elapsed = (now - self._since).total_seconds()
+            stable = not (
+                self._hr_hi
+                and (self._hr_hi - self._hr_lo) / self._hr_hi > STABLE_TOLERANCE
+            )
+            existing = self.store.get(key)
+            has_value = bool(existing and existing.get("eff") is not None)
+
+            # Seed: take over the device's own efficiency after a short stable
+            # window so the label isn't empty — only if this step has no value yet
+            # (pinned/manual + already-learned are left untouched by add_sample).
+            if not has_value and not self._seeded and stable and elapsed >= SEED_SECONDS:
+                self.store.add_sample(key, hashrate=hashrate, efficiency=efficiency)
+                self._seeded = True
                 return
-            # dwell reached — require the window to have been stable
-            if self._hr_hi and (self._hr_hi - self._hr_lo) / self._hr_hi > STABLE_TOLERANCE:
-                # too noisy: restart the window from now
+
+            # Refine: full stable dwell → EMA update (tracks BOS fine-tune drift).
+            if elapsed >= DWELL_SECONDS:
+                if not stable:
+                    self._since = now
+                    self._hr_lo = self._hr_hi = hashrate
+                    return
+                self.store.add_sample(key, hashrate=hashrate, efficiency=efficiency)
                 self._since = now
                 self._hr_lo = self._hr_hi = hashrate
-                return
-            self.store.add_sample(key, hashrate=hashrate, efficiency=efficiency)
-            # keep sampling: slide the window so EMA keeps tracking over time
-            self._since = now
-            self._hr_lo = self._hr_hi = hashrate
+                self._seeded = False
         except Exception:  # noqa: BLE001 — never break the coordinator loop
             return
