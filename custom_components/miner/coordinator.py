@@ -83,6 +83,9 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         # polled from /summary alongside the throttle. Lets the safety-reason
         # sensor say "tuning in progress" instead of a bare "OK".
         self.vnish_state: str | None = None
+        # GUI-set power limit (misc.power_limit) → caps the offered presets.
+        self.vnish_power_limit: int | None = None
+        self.vnish_power_limit_enabled: bool = False
 
         # ── Power-aware polling state ──────────────────────────────────────
         # When no power_entity is configured, power_on stays True forever and
@@ -284,6 +287,11 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
                 )
                 for p in detailed
             }
+            if self.password:
+                (
+                    self.vnish_power_limit,
+                    self.vnish_power_limit_enabled,
+                ) = await vnish.fetch_power_limit(session, self.ip, self.password)
 
         if not self._eff_loaded:
             await self.efficiency.async_load()

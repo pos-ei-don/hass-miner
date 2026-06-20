@@ -73,8 +73,38 @@ class VnishPresetProvider(LevelProvider):
         return label.strip().lower()
 
     def options(self) -> list[str]:
-        names = self.c.vnish_presets or list(vnish.FALLBACK_PRESETS)
+        full = self.c.vnish_presets or list(vnish.FALLBACK_PRESETS)
+        names = self._safety_cap(full)
         return [self._label_for(n) for n in names]
+
+    def _safety_cap(self, names: list[str]) -> list[str]:
+        """Drop presets above the GUI-set power limit (safety, #621).
+
+        With the limit known+enabled: keep presets <= limit plus the first one
+        ABOVE it (the boundary step, offered last). Without a readable limit:
+        fall back to the curated safe set (FALLBACK_PRESETS, <= 5560 W = the
+        non-modded-PSU ceiling) so unsafe untuned presets (>7000 W) never show.
+        """
+        limit = getattr(self.c, "vnish_power_limit", None)
+        enabled = getattr(self.c, "vnish_power_limit_enabled", False)
+        if enabled and limit:
+            out: list[str] = []
+            above_added = False
+            for n in names:
+                if not str(n).isdigit():
+                    out.append(n)
+                    continue
+                w = int(n)
+                if w <= limit:
+                    out.append(n)
+                elif not above_added:
+                    out.append(n)  # first step above the limit = boundary, last
+                    above_added = True
+            return out
+        # No readable limit → conservative curated ceiling.
+        safe = set(vnish.FALLBACK_PRESETS)
+        capped = [n for n in names if n in safe]
+        return capped or list(vnish.FALLBACK_PRESETS)
 
     def current_option(self) -> str | None:
         return self._label_for(self.c.vnish_preset)

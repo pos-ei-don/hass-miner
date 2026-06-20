@@ -181,6 +181,34 @@ async def fetch_current_preset(
     return s.get("miner", {}).get("overclock", {}).get("preset")
 
 
+async def fetch_power_limit(
+    session: aiohttp.ClientSession, ip: str, pw: str | None
+) -> tuple[int | None, bool]:
+    """Read the GUI-set power limit (``misc.power_limit`` + enabled flag) (auth).
+
+    Used to cap the offered presets for safety: presets above this watt limit are
+    dropped (only the first step above is kept as the last/boundary option).
+    """
+    token = await _unlock(session, ip, pw)
+    if not token:
+        return (None, False)
+    try:
+        async with session.get(
+            f"{_base(ip)}/settings",
+            headers={"Authorization": token},
+            timeout=_TIMEOUT,
+        ) as resp:
+            misc = (await resp.json()).get("miner", {}).get("misc", {})
+    except Exception:  # noqa: BLE001
+        return (None, False)
+    limit = misc.get("power_limit")
+    try:
+        limit = int(limit) if limit is not None else None
+    except (TypeError, ValueError):
+        limit = None
+    return (limit, bool(misc.get("power_limit_enabled")))
+
+
 async def apply_preset(
     session: aiohttp.ClientSession, ip: str, pw: str | None, preset: str
 ) -> tuple[bool, str]:
