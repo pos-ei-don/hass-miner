@@ -1,0 +1,159 @@
+"""Self-learning power-level efficiency map (#621, part B).
+
+Per config entry we persist a map ``{level_key: entry}`` in a Store (JSON file),
+where ``level_key`` is the VNish preset name or the watt setpoint (as str) and
+``entry`` holds the learned hashrate (TH/s) + efficiency (W/TH) as an EMA of the
+recent stable samples, plus sample count / pin / timestamp.
+
+Sampling is fed by the coordinator only when a level has run *stably* for a
+dwell window (mining, not tuning, hashrate within tolerance) — see
+``EfficiencySampler``. Manual values can be pinned (the learner won't overwrite
+them) and reset.
+"""
+
+from __future__ import annotations
+
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
+
+STORAGE_VERSION = 1
+
+# EMA weight for the newest stable sample (recent-weighted → tracks drift).
+EMA_ALPHA = 0.3
+# A level must run stably this long before a sample is recorded.
+DWELL_SECONDS = 900  # 15 min
+# Max relative hashrate spread within the dwell window to count as "stable".
+STABLE_TOLERANCE = 0.03  # ±3 %
+
+PLACEHOLDER = "—"
+LEARNING = "lernt…"
+
+
+def _round1(x):
+    return round(float(x), 1) if x is not None else None
+
+
+class EfficiencyStore:
+    """Persistent learned-efficiency map for one miner."""
+
+    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+        self.hass = hass
+        self._store = Store(hass, STORAGE_VERSION, f"miner_efficiency_{entry_id}")
+        self._map: dict[str, dict] = {}
+
+    async def async_load(self) -> None:
+        self._map = (await self._store.async_load()) or {}
+
+    def _save(self) -> None:
+        self._store.async_delay_save(lambda: self._map, 5)
+
+    # ── reads ────────────────────────────────────────────────────────────
+    def get(self, key) -> dict | None:
+        return self._map.get(str(key))
+
+    def as_map(self) -> dict[str, dict]:
+        return dict(self._map)
+
+    def label_suffix(self, key, *, sampling: bool = False) -> str:
+        """Display suffix for an option: learned values, else placeholder."""
+        e = self._map.get(str(key))
+        if e and e.get("eff") is not None:
+            hr = e.get("hashrate")
+            hr_s = f"{hr:.0f} TH · " if hr else ""
+            pin = " \U0001f4cc" if e.get("pinned") else ""
+            return f"{hr_s}{e['eff']:.0f} W/TH{pin}"
+        return LEARNING if sampling else PLACEHOLDER
+
+    # ── writes ───────────────────────────────────────────────────────────
+    def set_manual(self, key, *, hashrate=None, efficiency=None, pin=True) -> None:
+        e = self._map.setdefault(str(key), {"samples": 0})
+        if hashrate is not None:
+            e["hashrate"] = _round1(hashrate)
+        if efficiency is not None:
+            e["eff"] = _round1(efficiency)
+        e["pinned"] = bool(pin)
+        e["manual"] = True
+        e["ts"] = dt_util.utcnow().isoformat()
+        self._save()
+
+    def reset(self, key=None) -> None:
+        if key is None:
+            self._map.clear()
+        else:
+            self._map.pop(str(key), None)
+        self._save()
+
+    def add_sample(self, key, *, hashrate, efficiency) -> None:
+        """Fold one stable sample into the EMA (skips pinned/manual entries)."""
+        if not hashrate or not efficiency or hashrate <= 0 or efficiency <= 0:
+            return
+        e = self._map.get(str(key))
+        if e and e.get("pinned"):
+            return
+        if not e:
+            e = {"samples": 0}
+            self._map[str(key)] = e
+        if e.get("eff") is None or not e.get("samples"):
+            e["eff"] = _round1(efficiency)
+            e["hashrate"] = _round1(hashrate)
+        else:
+            e["eff"] = _round1(EMA_ALPHA * efficiency + (1 - EMA_ALPHA) * e["eff"])
+            e["hashrate"] = _round1(
+                EMA_ALPHA * hashrate + (1 - EMA_ALPHA) * e["hashrate"]
+            )
+        e["samples"] = int(e.get("samples", 0)) + 1
+        e["manual"] = False
+        e["ts"] = dt_util.utcnow().isoformat()
+        self._save()
+
+
+class EfficiencySampler:
+    """Tracks dwell + stability to decide when to record a sample.
+
+    Fed once per successful coordinator update via ``observe``. Fully defensive:
+    any bad/missing signal just skips sampling, never raises.
+    """
+
+    def __init__(self, store: EfficiencyStore) -> None:
+        self.store = store
+        self._key = None
+        self._since = None
+        self._hr_lo = None
+        self._hr_hi = None
+
+    @property
+    def active_key(self):
+        """The level currently accumulating a (not-yet-recorded) dwell, if any."""
+        return self._key
+
+    def observe(self, *, key, hashrate, efficiency, mining, tuning) -> None:
+        try:
+            now = dt_util.utcnow()
+            if key is None or not mining or tuning or not hashrate:
+                self._key = None
+                self._since = None
+                return
+            if key != self._key:
+                # level changed → start a fresh dwell window
+                self._key = key
+                self._since = now
+                self._hr_lo = self._hr_hi = hashrate
+                return
+            # same level: track hashrate spread for the stability check
+            self._hr_lo = min(self._hr_lo, hashrate)
+            self._hr_hi = max(self._hr_hi, hashrate)
+            if (now - self._since).total_seconds() < DWELL_SECONDS:
+                return
+            # dwell reached — require the window to have been stable
+            if self._hr_hi and (self._hr_hi - self._hr_lo) / self._hr_hi > STABLE_TOLERANCE:
+                # too noisy: restart the window from now
+                self._since = now
+                self._hr_lo = self._hr_hi = hashrate
+                return
+            self.store.add_sample(key, hashrate=hashrate, efficiency=efficiency)
+            # keep sampling: slide the window so EMA keeps tracking over time
+            self._since = now
+            self._hr_lo = self._hr_hi = hashrate
+        except Exception:  # noqa: BLE001 — never break the coordinator loop
+            return

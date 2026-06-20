@@ -32,9 +32,15 @@ from .const import (
     CAT_FANS,
     CAT_MINER_SUMMARY,
     CAT_SAFETY,
+    CONF_ENABLE_POWER_LEVELS,
     CONF_ONLY_AVAILABLE,
+    CONF_POWER_MAX,
+    CONF_POWER_MIN,
+    CONF_POWER_STEP,
     CONF_SENSOR_CATEGORIES,
+    DEFAULT_ENABLE_POWER_LEVELS,
     DEFAULT_ONLY_AVAILABLE,
+    DEFAULT_POWER_STEP,
     DEFAULT_SENSOR_CATEGORIES,
     DOMAIN,
 )
@@ -623,6 +629,69 @@ class MinerSafetyReasonSensor(MinerEntity, SensorEntity):
 # ── Platform setup ──────────────────────────────────────────────────────────
 
 
+class PowerLevelsStatusSensor(MinerEntity, SensorEntity):
+    """[#621] Diagnostic status of the power-level selector + learned efficiency.
+
+    State = readiness summary; attributes carry the learned map (also feeds the
+    dashboard) plus what is still missing, so a fresh install shows why some
+    things are limited.
+    """
+
+    _attr_name = "Leistungsstufen Status"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:format-list-numbered"
+
+    def __init__(self, coordinator: MinerCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._device_unique_id}_power_levels_status"
+
+    def _emap(self) -> dict:
+        eff = getattr(self.coordinator, "efficiency", None)
+        return eff.as_map() if eff is not None else {}
+
+    @property
+    def native_value(self) -> str:
+        learned = [k for k, v in self._emap().items() if v.get("eff") is not None]
+        if not learned:
+            return "Lernt…" if getattr(self.coordinator, "sampling_key", None) else "0 Stufen gelernt"
+        return f"{len(learned)} Stufen gelernt"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        c = self.coordinator
+        m = self._emap()
+        learned = [k for k, v in m.items() if v.get("eff") is not None]
+        pinned = [k for k, v in m.items() if v.get("pinned")]
+        entry = self.hass.config_entries.async_get_entry(c.entry_id)
+        opts = entry.options if entry else {}
+        mn = opts.get(CONF_POWER_MIN)
+        mx = opts.get(CONF_POWER_MAX)
+        if c.is_vnish:
+            range_source = "firmware"
+        elif mn and mx:
+            range_source = "konfiguriert"
+        else:
+            range_source = "heuristisch"
+        limitations: list[str] = []
+        if range_source == "heuristisch":
+            limitations.append("Min/Max nicht gesetzt → heuristische Range aktiv")
+        if not learned:
+            limitations.append(
+                "noch keine Stufe gelernt — Effizienz wird beim Laufen ermittelt"
+            )
+        return {
+            "range_source": range_source,
+            "min": mn,
+            "max": mx,
+            "step": opts.get(CONF_POWER_STEP, DEFAULT_POWER_STEP),
+            "levels_learned": len(learned),
+            "pinned": pinned,
+            "sampling_level": getattr(c, "sampling_key", None),
+            "limitations": limitations,
+            "efficiency_map": m,
+        }
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -686,6 +755,21 @@ async def async_setup_entry(
         for pos in coordinator.psu_fan_positions:
             descriptions.append(_fan_sensor(pos, psu=True))
 
+    # Power-level status sensor (#621): keep its key so stale-cleanup spares it.
+    add_power_status = bool(
+        entry.options.get(CONF_ENABLE_POWER_LEVELS, DEFAULT_ENABLE_POWER_LEVELS)
+        and (
+            coordinator.is_vnish
+            or bool(coordinator.profile and coordinator.profile.get("is_vnish"))
+            or (
+                coordinator.miner is not None
+                and coordinator.miner.supports_set_power_limit
+            )
+        )
+    )
+    if add_power_status:
+        extra_keys.add("power_levels_status")
+
     # only_available gate (A4): drop descriptions whose value is unavailable now.
     # When offline (data is None) we cannot evaluate availability — create
     # everything from the profile; the entities are unavailable anyway until a
@@ -709,4 +793,6 @@ async def async_setup_entry(
     ]
     if add_safety_reason:
         entities.append(MinerSafetyReasonSensor(coordinator))
+    if add_power_status:
+        entities.append(PowerLevelsStatusSensor(coordinator))
     async_add_entities(entities)

@@ -6,13 +6,21 @@ generic stepped-watt paths cannot drift apart:
 
 * VNish firmware  → ``VnishPresetProvider`` (BETA REST shim, see vnish.py)
 * set_power_limit  → ``SteppedPowerProvider`` (BOS / WhatsMiner, config/heuristic)
+
+Entity services (#621 B):
+* ``miner.reset_efficiency``  — clear learned efficiency (one level or all)
+* ``miner.set_efficiency``    — pin a known hashrate/efficiency for a level
+* ``miner.set_power_range``   — set min/max/step for the stepped levels
 """
 
 from __future__ import annotations
 
+import voluptuous as vol
+
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -63,6 +71,70 @@ class PowerLevelSelect(MinerEntity, SelectEntity):
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
+    # ── entity services (#621 B) ─────────────────────────────────────────
+    async def async_reset_efficiency(self, level: str | None = None) -> None:
+        self.coordinator.efficiency.reset(level)
+        self.async_write_ha_state()
+
+    async def async_set_efficiency(
+        self,
+        level: str,
+        hashrate: float | None = None,
+        efficiency: float | None = None,
+        pin: bool = True,
+    ) -> None:
+        self.coordinator.efficiency.set_manual(
+            level, hashrate=hashrate, efficiency=efficiency, pin=pin
+        )
+        self.async_write_ha_state()
+
+    async def async_set_power_range(
+        self,
+        min: float | None = None,  # noqa: A002 — HA service field name
+        max: float | None = None,  # noqa: A002
+        step: int | None = None,
+    ) -> None:
+        entry = self.hass.config_entries.async_get_entry(self.coordinator.entry_id)
+        if entry is None:
+            return
+        new_options = dict(entry.options)
+        if min is not None:
+            new_options[CONF_POWER_MIN] = min
+        if max is not None:
+            new_options[CONF_POWER_MAX] = max
+        if step is not None:
+            new_options[CONF_POWER_STEP] = int(step)
+        # Triggers the options update listener → entry reload → levels regenerate.
+        self.hass.config_entries.async_update_entry(entry, options=new_options)
+
+
+def _register_services() -> None:
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        "reset_efficiency",
+        {vol.Optional("level"): cv.string},
+        "async_reset_efficiency",
+    )
+    platform.async_register_entity_service(
+        "set_efficiency",
+        {
+            vol.Required("level"): cv.string,
+            vol.Optional("hashrate"): vol.Coerce(float),
+            vol.Optional("efficiency"): vol.Coerce(float),
+            vol.Optional("pin", default=True): cv.boolean,
+        },
+        "async_set_efficiency",
+    )
+    platform.async_register_entity_service(
+        "set_power_range",
+        {
+            vol.Optional("min"): vol.Coerce(float),
+            vol.Optional("max"): vol.Coerce(float),
+            vol.Optional("step"): vol.Coerce(int),
+        },
+        "async_set_power_range",
+    )
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -72,6 +144,8 @@ async def async_setup_entry(
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
     opts = entry.options
     enabled = opts.get(CONF_ENABLE_POWER_LEVELS, DEFAULT_ENABLE_POWER_LEVELS)
+
+    _register_services()
 
     entities: list[MinerEntity] = []
     if enabled:

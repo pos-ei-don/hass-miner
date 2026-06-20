@@ -20,6 +20,8 @@ import re
 
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from pyasic_rs.data import HashRateUnit
+
 from . import vnish
 
 # Placeholder shown where a learned efficiency value is not (yet) available.
@@ -54,6 +56,10 @@ class VnishPresetProvider(LevelProvider):
     def _label_for(self, name: str | None) -> str | None:
         if name is None:
             return None
+        eff = getattr(self.c, "efficiency", None)
+        if eff is not None and eff.get(name) is not None:
+            sk = getattr(self.c, "sampling_key", None)
+            return f"{name} W · {eff.label_suffix(name, sampling=(sk == name))}"
         return self.c.vnish_preset_labels.get(name, name)
 
     def _name_for(self, label: str) -> str:
@@ -148,7 +154,16 @@ class SteppedPowerProvider(LevelProvider):
             while w <= mx + 1:
                 levels.add(int(w))
                 w += step
-            return [f"{w} W · {PLACEHOLDER}" for w in sorted(levels)]
+            eff = getattr(self.c, "efficiency", None)
+            sk = getattr(self.c, "sampling_key", None)
+            out = []
+            for lvl in sorted(levels):
+                if eff is not None:
+                    suffix = eff.label_suffix(str(lvl), sampling=(sk == str(lvl)))
+                else:
+                    suffix = PLACEHOLDER
+                out.append(f"{lvl} W · {suffix}")
+            return out
         except Exception:  # noqa: BLE001
             return []
 
@@ -167,19 +182,15 @@ class SteppedPowerProvider(LevelProvider):
 
 
 def _as_th(eh) -> float | None:
-    """Best-effort extract a TH/s float from an expected-hashrate value."""
+    """Extract a TH/s float from an expected-hashrate value (proven method)."""
     if eh is None:
         return None
-    for attempt in (
-        lambda: float(eh),
-        lambda: float(getattr(eh, "th", None)),
-        lambda: float(getattr(eh, "terahash", None)),
-        lambda: float(getattr(eh, "into", lambda *_: None)()),
-    ):
-        try:
-            v = attempt()
-            if v and v > 0:
-                return v
-        except Exception:  # noqa: BLE001
-            continue
-    return None
+    try:
+        return eh.into_unit(HashRateUnit.TH).value
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        v = float(eh)
+        return v if v > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
