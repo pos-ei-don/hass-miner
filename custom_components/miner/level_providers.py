@@ -147,18 +147,26 @@ class SteppedPowerProvider(LevelProvider):
         except Exception:  # noqa: BLE001 — never let the UI crash on data shape
             return None
 
-    def _nominal_max(self) -> float | None:
-        """Realistic *safe* nominal max = expected_hashrate × the device's OWN
-        current efficiency. Never inflated (BOS exposes no max → a too-high
-        offered step could be harmful). Rounded to 50 W."""
+    def _default_max(self) -> float | None:
+        """STABLE, SAFE default max when none is configured (BOS exposes no max).
+
+        = the highest power level we already have a learned/pinned value for
+        (i.e. a point the miner has actually run at), else the current target.
+        Deliberately NOT derived from the live (fluctuating, low-load-inflated)
+        efficiency — that jittered the option list. To offer higher than ever
+        run, the user configures the max explicitly (safety)."""
         try:
-            th = _as_th(getattr(self.c.data, "expected_hashrate", None))
-            eff = getattr(self.c.data, "efficiency", None)
-            if th and eff and th > 0 and eff > 0:
-                return round((th * eff) / 50.0) * 50.0
+            m = self.c.efficiency.as_map()
+            keys = [
+                int(k)
+                for k, v in m.items()
+                if str(k).isdigit() and v.get("eff") is not None
+            ]
+            if keys:
+                return float(max(keys))
         except Exception:  # noqa: BLE001
             pass
-        return None
+        return self._current_watts()
 
     def _range(self) -> tuple[float, float, int]:
         """Return (min_w, max_w, step). Priority: config > device (BOS) > safe.
@@ -173,7 +181,7 @@ class SteppedPowerProvider(LevelProvider):
 
         step = int(self._cfg_step or bos.get("step") or self.DEFAULT_STEP)
         min_w = self._cfg_min or bos.get("min") or bos.get("current") or cur
-        max_w = self._cfg_max or self._nominal_max()
+        max_w = self._cfg_max or self._default_max()
 
         if max_w is None:
             max_w = (cur * 1.2) if cur else self.FALLBACK_MAX
