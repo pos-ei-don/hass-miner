@@ -13,6 +13,8 @@ them) and reset.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -27,8 +29,11 @@ DWELL_SECONDS = 900  # 15 min
 # aren't empty at the start; the device's own efficiency is taken over and then
 # refined by EMA as BOS keeps fine-tuning).
 SEED_SECONDS = 120  # 2 min
-# Max relative hashrate spread within the dwell window to count as "stable".
-STABLE_TOLERANCE = 0.03  # ±3 %
+# Stability is judged over a SLIDING recent window (not since window-start) so an
+# old ramp transient can't block seeding forever. Mining hashrate fluctuates, so
+# the tolerance is generous (3 % was far too strict — nothing ever seeded).
+STABLE_TOLERANCE = 0.10  # ±10 %
+STABLE_WINDOW_SECONDS = 180  # 3 min sliding window for the stability check
 
 PLACEHOLDER = "—"
 LEARNING = "lernt…"
@@ -123,8 +128,7 @@ class EfficiencySampler:
         self.store = store
         self._key = None
         self._since = None
-        self._hr_lo = None
-        self._hr_hi = None
+        self._recent: list[tuple] = []  # (timestamp, hashrate) within the window
         self._seeded = False
 
     @property
@@ -132,28 +136,35 @@ class EfficiencySampler:
         """The level currently accumulating a (not-yet-recorded) dwell, if any."""
         return self._key
 
+    def _stable(self, now) -> bool:
+        """Stable over the SLIDING recent window (old transients age out)."""
+        cutoff = now - timedelta(seconds=STABLE_WINDOW_SECONDS)
+        self._recent = [(t, h) for (t, h) in self._recent if t >= cutoff]
+        hrs = [h for _, h in self._recent]
+        if len(hrs) < 2:
+            return False
+        hi, lo = max(hrs), min(hrs)
+        return bool(hi) and (hi - lo) / hi <= STABLE_TOLERANCE
+
     def observe(self, *, key, hashrate, efficiency, mining, tuning) -> None:
         try:
             now = dt_util.utcnow()
             if key is None or not mining or tuning or not hashrate or not efficiency:
                 self._key = None
                 self._since = None
+                self._recent = []
+                self._seeded = False
                 return
             if key != self._key:
                 # level changed → start a fresh window
                 self._key = key
                 self._since = now
-                self._hr_lo = self._hr_hi = hashrate
+                self._recent = [(now, hashrate)]
                 self._seeded = False
                 return
-            # same level: track hashrate spread for the stability check
-            self._hr_lo = min(self._hr_lo, hashrate)
-            self._hr_hi = max(self._hr_hi, hashrate)
+            self._recent.append((now, hashrate))
             elapsed = (now - self._since).total_seconds()
-            stable = not (
-                self._hr_hi
-                and (self._hr_hi - self._hr_lo) / self._hr_hi > STABLE_TOLERANCE
-            )
+            stable = self._stable(now)  # prunes to the sliding window
             existing = self.store.get(key)
             has_value = bool(existing and existing.get("eff") is not None)
 
@@ -166,14 +177,9 @@ class EfficiencySampler:
                 return
 
             # Refine: full stable dwell → EMA update (tracks BOS fine-tune drift).
-            if elapsed >= DWELL_SECONDS:
-                if not stable:
-                    self._since = now
-                    self._hr_lo = self._hr_hi = hashrate
-                    return
+            if elapsed >= DWELL_SECONDS and stable:
                 self.store.add_sample(key, hashrate=hashrate, efficiency=efficiency)
                 self._since = now
-                self._hr_lo = self._hr_hi = hashrate
                 self._seeded = False
         except Exception:  # noqa: BLE001 — never break the coordinator loop
             return
