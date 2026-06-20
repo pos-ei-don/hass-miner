@@ -6,6 +6,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -78,7 +79,7 @@ class VnishThrottleNumber(MinerEntity, NumberEntity):
             self.coordinator.vnish_throttle = int(value)
             self.async_write_ha_state()
         else:
-            raise RuntimeError(f"VNish throttle {int(value)}% failed: {msg}")
+            raise HomeAssistantError(f"VNish throttle {int(value)}% failed: {msg}")
         await self.coordinator.async_request_refresh()
 
 

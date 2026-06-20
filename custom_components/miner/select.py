@@ -20,6 +20,7 @@ import voluptuous as vol
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -104,6 +105,16 @@ class PowerLevelSelect(MinerEntity, SelectEntity):
             new_options[CONF_POWER_MAX] = max
         if step is not None:
             new_options[CONF_POWER_STEP] = int(step)
+        # Validate before persisting (effective values incl. existing config).
+        eff_min = new_options.get(CONF_POWER_MIN)
+        eff_max = new_options.get(CONF_POWER_MAX)
+        eff_step = new_options.get(CONF_POWER_STEP)
+        if eff_step is not None and eff_step <= 0:
+            raise HomeAssistantError(f"step must be > 0 (got {eff_step})")
+        if eff_min is not None and eff_max is not None and eff_min >= eff_max:
+            raise HomeAssistantError(
+                f"min ({eff_min}) must be below max ({eff_max})"
+            )
         # Triggers the options update listener → entry reload → levels regenerate.
         self.hass.config_entries.async_update_entry(entry, options=new_options)
 
