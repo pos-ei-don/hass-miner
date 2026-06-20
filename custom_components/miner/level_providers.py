@@ -15,14 +15,18 @@ efficiency; the learned efficiency overlay arrives in a later step.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from pyasic_rs.data import HashRateUnit
 
 from . import vnish
+
+_LOGGER = logging.getLogger(__name__)
 
 # Placeholder shown where a learned efficiency value is not (yet) available.
 PLACEHOLDER = "—"
@@ -116,7 +120,7 @@ class VnishPresetProvider(LevelProvider):
             session, self.c.ip, self.c.password, name
         )
         if not ok:
-            raise RuntimeError(f"VNish preset '{name}' failed: {msg}")
+            raise HomeAssistantError(f"VNish preset '{name}' failed: {msg}")
         self.c.vnish_preset = name
 
 
@@ -225,7 +229,7 @@ class SteppedPowerProvider(LevelProvider):
     async def apply(self, option: str) -> None:
         watts = _leading_int(option)
         if watts is None:
-            raise RuntimeError(f"Invalid power level '{option}'")
+            raise HomeAssistantError(f"Invalid power level '{option}'")
         await self.c.miner.set_power_limit(watts)
 
 

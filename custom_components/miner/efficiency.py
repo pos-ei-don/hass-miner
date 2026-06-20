@@ -19,6 +19,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+import logging
+
+_LOGGER = logging.getLogger(__name__)
+
 STORAGE_VERSION = 1
 
 # EMA weight for the newest stable sample (recent-weighted → tracks drift).
@@ -114,6 +118,7 @@ class EfficiencyStore:
         e["samples"] = int(e.get("samples", 0)) + 1
         e["manual"] = False
         e["ts"] = dt_util.utcnow().isoformat()
+        _LOGGER.debug("learned level %s: %.1f TH, %.1f W/TH (sample #%d)", key, e.get("hashrate") or 0, e["eff"], e["samples"])
         self._save()
 
 

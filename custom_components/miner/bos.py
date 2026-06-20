@@ -12,7 +12,11 @@ with a safe, realistic default (never an inflated guess that could be harmful).
 
 from __future__ import annotations
 
+import logging
+
 import aiohttp
+
+_LOGGER = logging.getLogger(__name__)
 
 _TIMEOUT = aiohttp.ClientTimeout(total=8)
 _CONFIG_QUERY = (
@@ -60,6 +64,6 @@ async def fetch_power_config(session: aiohttp.ClientSession, ip: str) -> dict:
         out["current"] = at.get("powerTarget")
         out["step"] = ps.get("powerStep")
         out["min"] = ps.get("minPowerTarget")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.debug("BOS power config fetch failed for %s: %s", ip, e)
     return out
