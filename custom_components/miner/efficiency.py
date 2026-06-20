@@ -64,9 +64,9 @@ class EfficiencyStore:
         e = self._map.get(str(key))
         if e and e.get("eff") is not None:
             hr = e.get("hashrate")
-            hr_s = f"{hr:.0f} TH · " if hr else ""
+            hr_s = f"{hr:.1f} TH · " if hr else ""
             pin = " \U0001f4cc" if e.get("pinned") else ""
-            return f"{hr_s}{e['eff']:.0f} W/TH{pin}"
+            return f"{hr_s}{e['eff']:.1f} W/TH{pin}"
         return LEARNING if sampling else PLACEHOLDER
 
     # ── writes ───────────────────────────────────────────────────────────
