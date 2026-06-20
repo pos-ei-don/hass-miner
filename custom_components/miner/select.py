@@ -1,80 +1,66 @@
 """Select platform for ASIC Miner integration.
 
-BETA SOLUTION: VNish autotune-preset control. asic-rs is read-only for VNish
-presets, so this entity drives the VNish REST API directly (see vnish.py).
-Replace with the native miner method once asic-rs supports VNish writes.
+One unified ``PowerLevelSelect`` drives the discrete power-level control for BOTH
+miner types via a thin ``LevelProvider`` (#621), so the VNish-preset and the
+generic stepped-watt paths cannot drift apart:
+
+* VNish firmware  → ``VnishPresetProvider`` (BETA REST shim, see vnish.py)
+* set_power_limit  → ``SteppedPowerProvider`` (BOS / WhatsMiner, config/heuristic)
 """
 
 from __future__ import annotations
 
-import re
-
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import vnish
-from .const import DOMAIN
+from .const import (
+    CONF_ENABLE_POWER_LEVELS,
+    CONF_POWER_MAX,
+    CONF_POWER_MIN,
+    CONF_POWER_STEP,
+    DEFAULT_ENABLE_POWER_LEVELS,
+    DOMAIN,
+)
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity
+from .level_providers import (
+    LevelProvider,
+    SteppedPowerProvider,
+    VnishPresetProvider,
+)
 
 
-class VnishPresetSelect(MinerEntity, SelectEntity):
-    """[BETA] Select a VNish autotune preset by name."""
+class PowerLevelSelect(MinerEntity, SelectEntity):
+    """Discrete power-level selector (VNish presets OR stepped watts)."""
 
-    _attr_name = "VNish Preset"
-    _attr_icon = "mdi:speedometer"
-
-    def __init__(self, coordinator: MinerCoordinator) -> None:
+    def __init__(
+        self,
+        coordinator: MinerCoordinator,
+        provider: LevelProvider,
+        *,
+        unique_suffix: str,
+        name: str,
+        icon: str,
+    ) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{self._device_unique_id}_vnish_preset"
-
-    def _label_for(self, name: str | None) -> str | None:
-        if name is None:
-            return None
-        return self.coordinator.vnish_preset_labels.get(name, name)
-
-    def _name_for(self, label: str) -> str:
-        """Map a displayed label back to the canonical preset name VNish expects.
-
-        Prefer the exact label→name map; fall back to pulling the leading watt
-        number straight out of the label (VNish preset names are the bare number,
-        e.g. ``3495 W ~ 132 TH`` → ``3495``) so selection still resolves even if
-        the label map is stale or empty (e.g. offline). A label with no number
-        (``Disabled``) is returned lowercased to match the ``disabled`` preset.
-        """
-        for name, lbl in self.coordinator.vnish_preset_labels.items():
-            if lbl == label:
-                return name
-        m = re.match(r"\s*(\d+)", label)
-        if m:
-            return m.group(1)
-        return label.strip().lower()
+        self._provider = provider
+        self._attr_unique_id = f"{self._device_unique_id}_{unique_suffix}"
+        self._attr_name = name
+        self._attr_icon = icon
 
     @property
     def options(self) -> list[str]:
-        names = self.coordinator.vnish_presets or list(vnish.FALLBACK_PRESETS)
-        return [self._label_for(n) for n in names]
+        return [o for o in self._provider.options() if o is not None]
 
     @property
     def current_option(self) -> str | None:
-        return self._label_for(self.coordinator.vnish_preset)
+        return self._provider.current_option()
 
     async def async_select_option(self, option: str) -> None:
-        # ``option`` is the display label (e.g. "3495 W ~ 132 TH"); the VNish API
-        # needs the bare preset name ("3495").
-        name = self._name_for(option)
-        session = async_get_clientsession(self.hass)
-        ok, msg = await vnish.apply_preset(
-            session, self.coordinator.ip, self.coordinator.password, name
-        )
-        if ok:
-            self.coordinator.vnish_preset = name
-            self.async_write_ha_state()
-        else:
-            raise RuntimeError(f"VNish preset '{name}' failed: {msg}")
+        await self._provider.apply(option)
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
 
@@ -84,15 +70,43 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
+    opts = entry.options
+    enabled = opts.get(CONF_ENABLE_POWER_LEVELS, DEFAULT_ENABLE_POWER_LEVELS)
 
     entities: list[MinerEntity] = []
-
-    # VNish detection comes from the live connection; when offline-at-startup we
-    # fall back to the cached profile so the shim entities still appear.
-    is_vnish = coordinator.is_vnish or bool(
-        coordinator.profile and coordinator.profile.get("is_vnish")
-    )
-    if is_vnish:
-        entities.append(VnishPresetSelect(coordinator))
+    if enabled:
+        # VNish detection falls back to the cached profile when offline at startup.
+        is_vnish = coordinator.is_vnish or bool(
+            coordinator.profile and coordinator.profile.get("is_vnish")
+        )
+        if is_vnish:
+            # Same unique_id as the previous VnishPresetSelect → entity preserved.
+            entities.append(
+                PowerLevelSelect(
+                    coordinator,
+                    VnishPresetProvider(coordinator),
+                    unique_suffix="vnish_preset",
+                    name="VNish Preset",
+                    icon="mdi:speedometer",
+                )
+            )
+        elif (
+            coordinator.miner is not None
+            and coordinator.miner.supports_set_power_limit
+        ):
+            entities.append(
+                PowerLevelSelect(
+                    coordinator,
+                    SteppedPowerProvider(
+                        coordinator,
+                        min_w=opts.get(CONF_POWER_MIN),
+                        max_w=opts.get(CONF_POWER_MAX),
+                        step=opts.get(CONF_POWER_STEP),
+                    ),
+                    unique_suffix="power_level",
+                    name="Leistungsstufe",
+                    icon="mdi:speedometer",
+                )
+            )
 
     async_add_entities(entities)

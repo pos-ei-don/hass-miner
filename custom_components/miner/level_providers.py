@@ -1,0 +1,185 @@
+"""Power-level providers for the unified ``PowerLevelSelect`` (#621).
+
+A ``LevelProvider`` supplies the discrete power levels for one miner plus the
+apply / current operations. Two implementations keep the VNish (firmware
+presets) and the generic ``set_power_limit`` (stepped watts) paths on ONE select
+entity so they cannot drift apart:
+
+* ``VnishPresetProvider``  — firmware autotune presets via the VNish REST shim.
+* ``SteppedPowerProvider`` — watt steps generated from (min, max, step) for any
+  ``supports_set_power_limit`` miner (BOS / WhatsMiner).
+
+Alpha A scaffold: labels carry a ``· —`` placeholder for the (not-yet-learned)
+efficiency; the learned efficiency overlay arrives in a later step.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+from . import vnish
+
+# Placeholder shown where a learned efficiency value is not (yet) available.
+PLACEHOLDER = "—"
+
+
+def _leading_int(label: str) -> int | None:
+    """Pull the leading integer (watt / preset number) out of a label."""
+    m = re.match(r"\s*(\d+)", label or "")
+    return int(m.group(1)) if m else None
+
+
+class LevelProvider:
+    """Base interface. ``options``/``current_option`` are sync (cached state)."""
+
+    def options(self) -> list[str]:
+        return []
+
+    def current_option(self) -> str | None:
+        return None
+
+    async def apply(self, option: str) -> None:
+        raise NotImplementedError
+
+
+class VnishPresetProvider(LevelProvider):
+    """[BETA] Firmware autotune presets via the VNish REST API (see vnish.py)."""
+
+    def __init__(self, coordinator) -> None:
+        self.c = coordinator
+
+    def _label_for(self, name: str | None) -> str | None:
+        if name is None:
+            return None
+        return self.c.vnish_preset_labels.get(name, name)
+
+    def _name_for(self, label: str) -> str:
+        """Map a displayed label back to the canonical preset name VNish wants."""
+        for name, lbl in self.c.vnish_preset_labels.items():
+            if lbl == label:
+                return name
+        m = re.match(r"\s*(\d+)", label)
+        if m:
+            return m.group(1)
+        return label.strip().lower()
+
+    def options(self) -> list[str]:
+        names = self.c.vnish_presets or list(vnish.FALLBACK_PRESETS)
+        return [self._label_for(n) for n in names]
+
+    def current_option(self) -> str | None:
+        return self._label_for(self.c.vnish_preset)
+
+    async def apply(self, option: str) -> None:
+        name = self._name_for(option)
+        session = async_get_clientsession(self.c.hass)
+        ok, msg = await vnish.apply_preset(
+            session, self.c.ip, self.c.password, name
+        )
+        if not ok:
+            raise RuntimeError(f"VNish preset '{name}' failed: {msg}")
+        self.c.vnish_preset = name
+
+
+class SteppedPowerProvider(LevelProvider):
+    """Generic stepped watt levels for ``set_power_limit`` miners."""
+
+    DEFAULT_STEP = 200
+    # Only used to seed the initial heuristic range when nothing is configured;
+    # the learned efficiency map (later step) refines reality.
+    DEFAULT_EFF_W_PER_TH = 30.0
+    FALLBACK_MIN = 1000.0
+    FALLBACK_MAX = 4000.0
+
+    def __init__(
+        self, coordinator, *, min_w=None, max_w=None, step=None
+    ) -> None:
+        self.c = coordinator
+        self._cfg_min = float(min_w) if min_w else None
+        self._cfg_max = float(max_w) if max_w else None
+        self._step = int(step) if step else self.DEFAULT_STEP
+
+    def _current_watts(self) -> float | None:
+        try:
+            data = self.c.data
+            if data is None:
+                return None
+            tt = getattr(data, "tuning_target", None)
+            watts = getattr(tt, "watts", None) if tt else None
+            if watts is None:
+                watts = getattr(data, "wattage", None)
+            return float(watts) if watts is not None else None
+        except Exception:  # noqa: BLE001 — never let the UI crash on data shape
+            return None
+
+    def _range(self) -> tuple[float, float, int]:
+        """Return (min_w, max_w, step). Config wins; else heuristic; else default."""
+        step = self._step
+        min_w, max_w = self._cfg_min, self._cfg_max
+        if min_w and max_w:
+            return min_w, max_w, step
+
+        nominal = None
+        try:
+            th = _as_th(getattr(self.c.data, "expected_hashrate", None))
+            if th:
+                nominal = th * self.DEFAULT_EFF_W_PER_TH
+        except Exception:  # noqa: BLE001
+            nominal = None
+        cur = self._current_watts()
+
+        if max_w is None:
+            max_w = nominal or (cur * 1.5 if cur else None) or self.FALLBACK_MAX
+        if min_w is None:
+            min_w = max(step, (cur * 0.6) if cur else max_w * 0.3)
+        if min_w >= max_w:
+            min_w = max(step, max_w - step)
+        return float(min_w), float(max_w), step
+
+    def options(self) -> list[str]:
+        try:
+            mn, mx, step = self._range()
+            levels: set[int] = {int(round(mn))}
+            start = int(math.ceil(mn / 1000.0)) * 1000
+            w = max(start, step)
+            while w <= mx + 1:
+                levels.add(int(w))
+                w += step
+            return [f"{w} W · {PLACEHOLDER}" for w in sorted(levels)]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def current_option(self) -> str | None:
+        cur = self._current_watts()
+        opts = self.options()
+        if cur is None or not opts:
+            return None
+        return min(opts, key=lambda o: abs((_leading_int(o) or 0) - cur))
+
+    async def apply(self, option: str) -> None:
+        watts = _leading_int(option)
+        if watts is None:
+            raise RuntimeError(f"Invalid power level '{option}'")
+        await self.c.miner.set_power_limit(watts)
+
+
+def _as_th(eh) -> float | None:
+    """Best-effort extract a TH/s float from an expected-hashrate value."""
+    if eh is None:
+        return None
+    for attempt in (
+        lambda: float(eh),
+        lambda: float(getattr(eh, "th", None)),
+        lambda: float(getattr(eh, "terahash", None)),
+        lambda: float(getattr(eh, "into", lambda *_: None)()),
+    ):
+        try:
+            v = attempt()
+            if v and v > 0:
+                return v
+        except Exception:  # noqa: BLE001
+            continue
+    return None
