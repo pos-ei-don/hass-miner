@@ -29,18 +29,26 @@ from pyasic_rs import MinerFactory
 
 from .const import (
     CONF_BOOT_TIMEOUT,
+    CONF_ENABLE_POWER_LEVELS,
     CONF_ONLY_AVAILABLE,
     CONF_POWER_ENTITY,
+    CONF_POWER_MAX,
+    CONF_POWER_MIN,
+    CONF_POWER_STEP,
     CONF_SCAN_INTERVAL,
     CONF_SENSOR_CATEGORIES,
     DEFAULT_BOOT_TIMEOUT,
+    DEFAULT_ENABLE_POWER_LEVELS,
     DEFAULT_ONLY_AVAILABLE,
+    DEFAULT_POWER_STEP,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SENSOR_CATEGORIES,
     DOMAIN,
     MAX_BOOT_TIMEOUT,
+    MAX_POWER_STEP,
     MAX_SCAN_INTERVAL,
     MIN_BOOT_TIMEOUT,
+    MIN_POWER_STEP,
     MIN_SCAN_INTERVAL,
     SENSOR_CATEGORIES,
 )
@@ -284,6 +292,12 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
         current_scan_interval = options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         current_power_entity = options.get(CONF_POWER_ENTITY, "")
         current_boot_timeout = options.get(CONF_BOOT_TIMEOUT, DEFAULT_BOOT_TIMEOUT)
+        current_enable_levels = options.get(
+            CONF_ENABLE_POWER_LEVELS, DEFAULT_ENABLE_POWER_LEVELS
+        )
+        current_power_step = options.get(CONF_POWER_STEP, DEFAULT_POWER_STEP)
+        current_power_min = options.get(CONF_POWER_MIN)  # None ⇒ heuristic
+        current_power_max = options.get(CONF_POWER_MAX)  # None ⇒ heuristic
 
         categories_select = SelectSelector(
             SelectSelectorConfig(
@@ -319,6 +333,24 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                 mode=NumberSelectorMode.BOX,
             )
         )
+        power_step_select = NumberSelector(
+            NumberSelectorConfig(
+                min=MIN_POWER_STEP,
+                max=MAX_POWER_STEP,
+                step=10,
+                unit_of_measurement="W",
+                mode=NumberSelectorMode.BOX,
+            )
+        )
+        power_watt_select = NumberSelector(
+            NumberSelectorConfig(
+                min=1,
+                max=20_000,
+                step=10,
+                unit_of_measurement="W",
+                mode=NumberSelectorMode.BOX,
+            )
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -343,6 +375,22 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_BOOT_TIMEOUT, default=current_boot_timeout
                     ): boot_timeout_select,
+                    # Power-level selector (#621): enable + stepping. min/max use
+                    # suggested_value so leaving them empty ⇒ heuristic range.
+                    vol.Optional(
+                        CONF_ENABLE_POWER_LEVELS, default=current_enable_levels
+                    ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_POWER_STEP, default=current_power_step
+                    ): power_step_select,
+                    vol.Optional(
+                        CONF_POWER_MIN,
+                        description={"suggested_value": current_power_min},
+                    ): power_watt_select,
+                    vol.Optional(
+                        CONF_POWER_MAX,
+                        description={"suggested_value": current_power_max},
+                    ): power_watt_select,
                     vol.Optional(CONF_PASSWORD, default=current_password): str,
                 }
             ),

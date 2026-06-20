@@ -48,3 +48,16 @@ SENSOR_CATEGORIES = [
 # Sensible defaults: the everyday summary plus the safety alarm.
 DEFAULT_SENSOR_CATEGORIES = [CAT_MINER_SUMMARY, CAT_SAFETY]
 DEFAULT_ONLY_AVAILABLE = True
+
+# ── Options: power-level selector (#621) ────────────────────────────────────
+# A discrete "Leistungsstufen-Wähler" (select). VNish miners get firmware
+# presets; set_power_limit miners (BOS/WhatsMiner) get watt steps generated from
+# (min, max, step). min/max unset ⇒ heuristic range from runtime data.
+CONF_ENABLE_POWER_LEVELS = "enable_power_levels"
+CONF_POWER_MIN = "power_min"
+CONF_POWER_MAX = "power_max"
+CONF_POWER_STEP = "power_step"
+DEFAULT_ENABLE_POWER_LEVELS = True
+DEFAULT_POWER_STEP = 200
+MIN_POWER_STEP = 50
+MAX_POWER_STEP = 1000
