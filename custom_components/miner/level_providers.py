@@ -125,6 +125,11 @@ class SteppedPowerProvider(LevelProvider):
 
     DEFAULT_STEP = 200
     FALLBACK_MAX = 3000.0
+    # Rated-class efficiency (W/TH) used to estimate the nominal-rated max when
+    # the device exposes no rated power (BOS doesn't). Stable constant × the
+    # model's nominal hashrate → a sensible default ≈ rated; the owner can
+    # configure ANY higher value (their responsibility, no clamp).
+    NOMINAL_EFF_W_PER_TH = 27.0
 
     def __init__(
         self, coordinator, *, min_w=None, max_w=None, step=None
@@ -148,25 +153,21 @@ class SteppedPowerProvider(LevelProvider):
             return None
 
     def _default_max(self) -> float | None:
-        """STABLE, SAFE default max when none is configured (BOS exposes no max).
+        """STABLE default max when none is configured (BOS exposes no rated max).
 
-        = the highest power level we already have a learned/pinned value for
-        (i.e. a point the miner has actually run at), else the current target.
-        Deliberately NOT derived from the live (fluctuating, low-load-inflated)
-        efficiency — that jittered the option list. To offer higher than ever
-        run, the user configures the max explicitly (safety)."""
+        = model nominal hashrate × a rated-class efficiency constant → a sensible
+        ≈ rated default (so the list reaches the nominal point, not just what's
+        been run so far). STABLE: expected_hashrate is a constant model value, so
+        no jitter (unlike the live efficiency). The owner can configure ANY higher
+        value — that's their business; no clamp is applied to a configured max."""
         try:
-            m = self.c.efficiency.as_map()
-            keys = [
-                int(k)
-                for k, v in m.items()
-                if str(k).isdigit() and v.get("eff") is not None
-            ]
-            if keys:
-                return float(max(keys))
+            th = _as_th(getattr(self.c.data, "expected_hashrate", None))
+            if th and th > 0:
+                return round(th * self.NOMINAL_EFF_W_PER_TH / 50.0) * 50.0
         except Exception:  # noqa: BLE001
             pass
-        return self._current_watts()
+        cur = self._current_watts()
+        return (cur * 1.5) if cur else self.FALLBACK_MAX
 
     def _range(self) -> tuple[float, float, int]:
         """Return (min_w, max_w, step). Priority: config > device (BOS) > safe.
