@@ -361,6 +361,11 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             if self.is_vnish:
                 key = self.vnish_preset
                 tuning = (self.vnish_state or "").lower() in _VNISH_TUNING_STATES
+                # Throttled VNish: hashrate/efficiency reflect the throttle, not
+                # the preset → would contaminate the per-preset value. Only learn
+                # at full throttle (100); otherwise skip (reuse the tuning path).
+                if self.vnish_throttle is not None and self.vnish_throttle < 100:
+                    tuning = True
             else:
                 tt = getattr(data, "tuning_target", None)
                 watts = getattr(tt, "watts", None) if tt else None
