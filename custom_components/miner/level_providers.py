@@ -124,11 +124,7 @@ class SteppedPowerProvider(LevelProvider):
     """Generic stepped watt levels for ``set_power_limit`` miners."""
 
     DEFAULT_STEP = 200
-    # Only used to seed the initial heuristic range when nothing is configured;
-    # the learned efficiency map (later step) refines reality.
-    DEFAULT_EFF_W_PER_TH = 30.0
-    FALLBACK_MIN = 1000.0
-    FALLBACK_MAX = 4000.0
+    FALLBACK_MAX = 3000.0
 
     def __init__(
         self, coordinator, *, min_w=None, max_w=None, step=None
@@ -136,7 +132,7 @@ class SteppedPowerProvider(LevelProvider):
         self.c = coordinator
         self._cfg_min = float(min_w) if min_w else None
         self._cfg_max = float(max_w) if max_w else None
-        self._step = int(step) if step else self.DEFAULT_STEP
+        self._cfg_step = int(step) if step else None
 
     def _current_watts(self) -> float | None:
         try:
@@ -151,29 +147,42 @@ class SteppedPowerProvider(LevelProvider):
         except Exception:  # noqa: BLE001 — never let the UI crash on data shape
             return None
 
-    def _range(self) -> tuple[float, float, int]:
-        """Return (min_w, max_w, step). Config wins; else heuristic; else default."""
-        step = self._step
-        min_w, max_w = self._cfg_min, self._cfg_max
-        if min_w and max_w:
-            return min_w, max_w, step
-
-        nominal = None
+    def _nominal_max(self) -> float | None:
+        """Realistic *safe* nominal max = expected_hashrate × the device's OWN
+        current efficiency. Never inflated (BOS exposes no max → a too-high
+        offered step could be harmful). Rounded to 50 W."""
         try:
             th = _as_th(getattr(self.c.data, "expected_hashrate", None))
-            if th:
-                nominal = th * self.DEFAULT_EFF_W_PER_TH
+            eff = getattr(self.c.data, "efficiency", None)
+            if th and eff and th > 0 and eff > 0:
+                return round((th * eff) / 50.0) * 50.0
         except Exception:  # noqa: BLE001
-            nominal = None
+            pass
+        return None
+
+    def _range(self) -> tuple[float, float, int]:
+        """Return (min_w, max_w, step). Priority: config > device (BOS) > safe.
+
+        - step: config → BOS powerStep → default 200
+        - min:  config → BOS minPowerTarget → BOS current target → current watts
+        - max:  config → realistic nominal (hashrate×eff). BOS exposes NO max, so
+          we never guess high — the max stays user-configurable for safety.
+        """
+        bos = getattr(self.c, "bos_power_config", None) or {}
         cur = self._current_watts()
 
+        step = int(self._cfg_step or bos.get("step") or self.DEFAULT_STEP)
+        min_w = self._cfg_min or bos.get("min") or bos.get("current") or cur
+        max_w = self._cfg_max or self._nominal_max()
+
         if max_w is None:
-            max_w = nominal or (cur * 1.5 if cur else None) or self.FALLBACK_MAX
+            max_w = (cur * 1.2) if cur else self.FALLBACK_MAX
         if min_w is None:
-            min_w = max(step, (cur * 0.6) if cur else max_w * 0.3)
+            min_w = max(step, max_w * 0.3)
+        min_w, max_w = float(min_w), float(max_w)
         if min_w >= max_w:
-            min_w = max(step, max_w - step)
-        return float(min_w), float(max_w), step
+            max_w = min_w + step
+        return min_w, max_w, step
 
     def options(self) -> list[str]:
         try:
