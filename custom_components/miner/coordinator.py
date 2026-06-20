@@ -13,13 +13,24 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from pyasic_rs import MinerFactory
-from pyasic_rs.data import MinerData
+from pyasic_rs.data import HashRateUnit, MinerData
 from pyasic_rs.miner import Miner
 
 from . import vnish
 from .const import BOOT_POLL_INTERVAL, DEFAULT_BOOT_TIMEOUT, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .efficiency import EfficiencySampler, EfficiencyStore
 
 _LOGGER = logging.getLogger(__name__)
+
+# VNish self-reported states that are NOT steady mining → never sample these.
+_VNISH_TUNING_STATES = {
+    "tuning",
+    "autotuning",
+    "initializing",
+    "preheating",
+    "starting",
+    "stopped",
+}
 
 
 class MinerCoordinator(DataUpdateCoordinator[MinerData]):
@@ -41,6 +52,7 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         self.ip = ip
         self.username = username
         self.password = password
+        self.entry_id = entry_id
 
         # ── Offline resilience: cached device profile ──────────────────────
         # Persisted via Store (NOT entry.data — writing entry.data would trigger
@@ -50,6 +62,11 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         # live ``data`` is None.
         self._store: Store = Store(hass, 1, f"{DOMAIN}_profile_{entry_id}")
         self.profile: dict | None = None
+
+        # ── Self-learning power-level efficiency map (#621 B) ───────────────
+        self.efficiency = EfficiencyStore(hass, entry_id)
+        self._eff_sampler = EfficiencySampler(self.efficiency)
+        self._eff_loaded = False
 
         # Configured (normal) scan interval — kept so we can restore it after a
         # boot fast-loop or after power returns.
@@ -268,6 +285,10 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
                 for p in detailed
             }
 
+        if not self._eff_loaded:
+            await self.efficiency.async_load()
+            self._eff_loaded = True
+
     async def _async_update_data(self) -> MinerData:
         if self.power_entity and not self.power_on:
             # Benign: no network call while powered off. Entities go unavailable.
@@ -304,9 +325,50 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         if self.is_vnish:
             await self._async_update_vnish()
 
+        # Feed the self-learning efficiency map (defensive: never raises).
+        self._observe_efficiency(data)
+
         # Persist a fresh device profile so the entry can load offline next time.
         await self._async_store_profile(data)
         return data
+
+    @property
+    def sampling_key(self):
+        """Level key currently accumulating a dwell window (for 'lernt…' label)."""
+        return self._eff_sampler.active_key if self._eff_sampler else None
+
+    def _observe_efficiency(self, data: MinerData) -> None:
+        """Extract (level, hashrate, efficiency, mining, tuning) → sampler."""
+        try:
+            if self._eff_sampler is None:
+                return
+            if self.is_vnish:
+                key = self.vnish_preset
+                tuning = (self.vnish_state or "").lower() in _VNISH_TUNING_STATES
+            else:
+                tt = getattr(data, "tuning_target", None)
+                watts = getattr(tt, "watts", None) if tt else None
+                if watts is None:
+                    watts = getattr(data, "wattage", None)
+                key = str(int(round(watts))) if watts else None
+                tuning = False
+            try:
+                hashrate = (
+                    data.hashrate.into_unit(HashRateUnit.TH).value
+                    if data.hashrate
+                    else None
+                )
+            except Exception:  # noqa: BLE001
+                hashrate = None
+            self._eff_sampler.observe(
+                key=key,
+                hashrate=hashrate,
+                efficiency=getattr(data, "efficiency", None),
+                mining=bool(getattr(data, "is_mining", False)),
+                tuning=tuning,
+            )
+        except Exception:  # noqa: BLE001
+            return
 
     async def _async_update_vnish(self) -> None:
         """BETA: refresh VNish preset/throttle. Never fails the main update."""
