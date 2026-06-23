@@ -25,7 +25,8 @@ import aiohttp
 from homeassistant.components.update import UpdateDeviceClass, UpdateEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -79,6 +80,17 @@ async def _fetch_vnish_latest_stable(
     return max(stable, key=_version_tuple)
 
 
+def _register_services() -> None:
+    """Register the manual firmware-update-check service (idempotent)."""
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        "check_firmware_update",
+        {},
+        "async_check_firmware_update",
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -86,6 +98,8 @@ async def async_setup_entry(
 ) -> None:
     """Set up the firmware-update entity for miners where we can determine it."""
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
+
+    _register_services()
 
     is_vnish = coordinator.is_vnish or bool(
         coordinator.profile and coordinator.profile.get("is_vnish")
@@ -163,3 +177,22 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
         if result is not None:
             self._latest_version = getattr(result, "latest_version", None)
             self._release_url = getattr(result, "release_url", None)
+
+    async def async_check_firmware_update(self) -> dict:
+        """Service `miner.check_firmware_update`: force a check now, return result.
+
+        Triggers the (otherwise ~daily) check immediately and writes state, so the
+        user doesn't have to wait for the next poll. Returns installed/latest and
+        whether an update is available.
+        """
+        await self.async_update()
+        self.async_write_ha_state()
+        installed = self.installed_version
+        return {
+            "installed_version": installed,
+            "latest_version": self.latest_version,
+            "update_available": bool(
+                self._latest_version and self._latest_version != installed
+            ),
+            "release_url": self._release_url,
+        }
