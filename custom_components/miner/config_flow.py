@@ -37,8 +37,10 @@ from .const import (
     CONF_POWER_STEP,
     CONF_SCAN_INTERVAL,
     CONF_SENSOR_CATEGORIES,
+    CONF_SIMPLE_NAMING,
     DEFAULT_BOOT_TIMEOUT,
     DEFAULT_ENABLE_POWER_LEVELS,
+    DEFAULT_SIMPLE_NAMING,
     DEFAULT_ONLY_AVAILABLE,
     DEFAULT_POWER_STEP,
     DEFAULT_SCAN_INTERVAL,
@@ -295,6 +297,9 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
         current_enable_levels = options.get(
             CONF_ENABLE_POWER_LEVELS, DEFAULT_ENABLE_POWER_LEVELS
         )
+        current_simple_naming = options.get(
+            CONF_SIMPLE_NAMING, DEFAULT_SIMPLE_NAMING
+        )
         current_power_step = options.get(CONF_POWER_STEP, DEFAULT_POWER_STEP)
         current_power_min = options.get(CONF_POWER_MIN)  # None ⇒ heuristic
         current_power_max = options.get(CONF_POWER_MAX)  # None ⇒ heuristic
@@ -391,6 +396,12 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                         CONF_POWER_MAX,
                         description={"suggested_value": current_power_max},
                     ): power_watt_select,
+                    # #625: deterministic entity_ids ("miner_<slug>_<key>") for
+                    # NEW entities. Existing entities migrate only via the
+                    # "Apply naming scheme" button.
+                    vol.Optional(
+                        CONF_SIMPLE_NAMING, default=current_simple_naming
+                    ): BooleanSelector(),
                     vol.Optional(CONF_PASSWORD, default=current_password): str,
                 }
             ),

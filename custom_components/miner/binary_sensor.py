@@ -77,6 +77,7 @@ class MinerBootTimeoutBinarySensor(MinerEntity, BinarySensorEntity):
     def __init__(self, coordinator: MinerCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._device_unique_id}_boot_timeout"
+        self._apply_naming("binary_sensor")
 
     @property
     def is_on(self) -> bool:
@@ -99,6 +100,7 @@ class MinerBinarySensorEntity(MinerEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{self._device_unique_id}_{description.key}"
+        self._apply_naming("binary_sensor")
 
     @property
     def is_on(self) -> bool | None:

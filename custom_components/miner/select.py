@@ -56,6 +56,7 @@ class PowerLevelSelect(MinerEntity, SelectEntity):
         super().__init__(coordinator)
         self._provider = provider
         self._attr_unique_id = f"{self._device_unique_id}_{unique_suffix}"
+        self._apply_naming("select")
         self._attr_name = name
         self._attr_icon = icon
 
@@ -164,7 +165,10 @@ async def async_setup_entry(
         is_vnish = coordinator.is_vnish or bool(
             coordinator.profile and coordinator.profile.get("is_vnish")
         )
-        if is_vnish:
+        # Only offer the preset select if the lib actually supports presets.
+        # Guards against a wheel without preset support showing a half-working
+        # select ("unknown" current + fallback options) — the 0.7.0.4 regression.
+        if is_vnish and coordinator.supports_presets:
             # Same unique_id as the previous VnishPresetSelect → entity preserved.
             entities.append(
                 PowerLevelSelect(

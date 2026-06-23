@@ -186,6 +186,21 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             "fan_positions": [f.position for f in data.fans],
             "psu_fan_positions": [f.position for f in data.psu_fans],
             "is_vnish": self.is_vnish,
+            # Cache control capabilities so native entities can be created even
+            # when the miner is offline at next startup (no reload needed, #634).
+            "supports_set_power_limit": bool(
+                getattr(self.miner, "supports_set_power_limit", False)
+            ),
+            "supports_pause": bool(getattr(self.miner, "supports_pause", False)),
+            "supports_resume": bool(getattr(self.miner, "supports_resume", False)),
+            "supports_restart": bool(getattr(self.miner, "supports_restart", False)),
+            "supports_set_fault_light": bool(
+                getattr(self.miner, "supports_set_fault_light", False)
+            ),
+            "supports_presets": bool(getattr(self.miner, "supports_presets", False)),
+            "supports_check_firmware_update": bool(
+                getattr(self.miner, "supports_check_firmware_update", False)
+            ),
         }
         if profile != self.profile:
             self.profile = profile
@@ -258,6 +273,43 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             return list(self.profile.get("psu_fan_positions") or [])
         return []
 
+    # Control-capability flags: live miner when connected, else the cached
+    # profile (#634). Lets platform setups create native control entities even
+    # when the miner is offline at startup — they show unavailable and recover
+    # when it returns, without needing a reload.
+    def _supports(self, cap: str) -> bool:
+        if self.miner is not None:
+            return bool(getattr(self.miner, cap, False))
+        return bool(self.profile and self.profile.get(cap))
+
+    @property
+    def supports_set_power_limit(self) -> bool:
+        return self._supports("supports_set_power_limit")
+
+    @property
+    def supports_pause(self) -> bool:
+        return self._supports("supports_pause")
+
+    @property
+    def supports_resume(self) -> bool:
+        return self._supports("supports_resume")
+
+    @property
+    def supports_restart(self) -> bool:
+        return self._supports("supports_restart")
+
+    @property
+    def supports_set_fault_light(self) -> bool:
+        return self._supports("supports_set_fault_light")
+
+    @property
+    def supports_presets(self) -> bool:
+        return self._supports("supports_presets")
+
+    @property
+    def supports_check_firmware_update(self) -> bool:
+        return self._supports("supports_check_firmware_update")
+
     # ── Setup / update ─────────────────────────────────────────────────────
 
     async def _async_setup(self) -> None:
@@ -267,28 +319,35 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         miner = await factory.get_miner(self.ip)
         if miner is None:
             raise UpdateFailed(f"Could not identify miner at {self.ip}")
-        if self.username and self.password:
-            miner.set_auth(self.username, self.password)
+        # Auth on password alone: VNish is password-only (no username), and the
+        # native control paths (get_presets/set_preset/set_throttle) authenticate
+        # via this set_auth — without it they would have no token.
+        if self.password:
+            miner.set_auth(self.username or "", self.password)
         self.miner = miner
 
-        # BETA: detect VNish firmware so the preset/throttle entities get added.
+        # Detect VNish firmware so the preset/throttle entities get added.
         session = async_get_clientsession(self.hass)
         self.is_vnish = await vnish.detect_vnish(session, self.ip)
-        detailed: list[dict] = []
-        if self.is_vnish and self.password:
-            detailed = await vnish.fetch_presets(session, self.ip, self.password)
-        if self.is_vnish and not detailed:
-            # No live list (no password / fetch failed): fall back to bare names,
-            # no tuned/un-tuned label info available offline.
-            detailed = [{"name": n} for n in vnish.FALLBACK_PRESETS]
         if self.is_vnish:
-            self.vnish_presets = [p["name"] for p in detailed]
-            self.vnish_preset_labels = {
-                p["name"]: vnish.preset_label(
-                    p["name"], p.get("pretty"), p.get("status")
-                )
-                for p in detailed
-            }
+            # Native (asic-rs 0.7.0.2+): preset list/labels come from the library
+            # (miner.get_presets), authenticated via the set_auth above — no REST
+            # shim. Each PresetInfo carries name/pretty/status for the label.
+            presets: list = []
+            try:
+                presets = await self.miner.get_presets()
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("native get_presets failed for %s: %s", self.ip, err)
+            if presets:
+                self.vnish_presets = [p.name for p in presets]
+                self.vnish_preset_labels = {
+                    p.name: vnish.preset_label(p.name, p.pretty, p.status)
+                    for p in presets
+                }
+            else:
+                # No live list (no password / unreachable): bare fallback names.
+                self.vnish_presets = list(vnish.FALLBACK_PRESETS)
+                self.vnish_preset_labels = {n: n for n in vnish.FALLBACK_PRESETS}
             if self.password:
                 (
                     self.vnish_power_limit,
@@ -399,8 +458,7 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
                 session, self.ip
             )
             if self.password:
-                self.vnish_preset = await vnish.fetch_current_preset(
-                    session, self.ip, self.password
-                )
+                # Native: current preset from the library (auth via set_auth).
+                self.vnish_preset = await self.miner.get_current_preset()
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("VNish extra-poll failed for %s: %s", self.ip, err)

@@ -24,6 +24,7 @@ PLATFORMS = [
     Platform.BUTTON,
     Platform.NUMBER,
     Platform.SELECT,
+    Platform.UPDATE,
 ]
 
 

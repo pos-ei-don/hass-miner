@@ -20,7 +20,6 @@ import math
 import re
 
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from pyasic_rs.data import HashRateUnit
 
@@ -52,7 +51,7 @@ class LevelProvider:
 
 
 class VnishPresetProvider(LevelProvider):
-    """[BETA] Firmware autotune presets via the VNish REST API (see vnish.py)."""
+    """VNish autotune presets, native via asic-rs (miner.get_presets/set_preset)."""
 
     def __init__(self, coordinator) -> None:
         self.c = coordinator
@@ -115,12 +114,10 @@ class VnishPresetProvider(LevelProvider):
 
     async def apply(self, option: str) -> None:
         name = self._name_for(option)
-        session = async_get_clientsession(self.c.hass)
-        ok, msg = await vnish.apply_preset(
-            session, self.c.ip, self.c.password, name
-        )
+        # Native: select the preset via the library (auth via set_auth).
+        ok = await self.c.miner.set_preset(name)
         if not ok:
-            raise HomeAssistantError(f"VNish preset '{name}' failed: {msg}")
+            raise HomeAssistantError(f"VNish preset '{name}' failed")
         self.c.vnish_preset = name
 
 
@@ -156,6 +153,22 @@ class SteppedPowerProvider(LevelProvider):
         except Exception:  # noqa: BLE001 — never let the UI crash on data shape
             return None
 
+    def _lib_target(self, name: str) -> float | None:
+        """Read a factory power-target (default/min/max) from the asic-rs MinerData.
+
+        The library is the source of truth (lib-first); these come from the
+        firmware's own tuner metadata (e.g. BOS bosminer.metadata.autotuning.
+        powerTarget). Returns watts, or None if the lib/wheel doesn't expose it.
+        """
+        try:
+            data = self.c.data
+            if data is None:
+                return None
+            w = getattr(data, name, None)
+            return float(w) if w is not None else None
+        except Exception:  # noqa: BLE001
+            return None
+
     def _default_max(self) -> float | None:
         """STABLE default max when none is configured (BOS exposes no rated max).
 
@@ -184,9 +197,13 @@ class SteppedPowerProvider(LevelProvider):
         bos = getattr(self.c, "bos_power_config", None) or {}
         cur = self._current_watts()
 
+        # Lib-first: the firmware's own reported power-target bounds (asic-rs).
+        lib_min = self._lib_target("min_power_target")
+        lib_max = self._lib_target("max_power_target")
+
         step = int(self._cfg_step or bos.get("step") or self.DEFAULT_STEP)
-        min_w = self._cfg_min or bos.get("min") or bos.get("current") or cur
-        max_w = self._cfg_max or self._default_max()
+        min_w = self._cfg_min or lib_min or bos.get("min") or bos.get("current") or cur
+        max_w = self._cfg_max or lib_max or self._default_max()
 
         if max_w is None:
             max_w = (cur * 1.2) if cur else self.FALLBACK_MAX
@@ -206,6 +223,12 @@ class SteppedPowerProvider(LevelProvider):
             while w <= mx + 1:
                 levels.add(int(w))
                 w += step
+            # The factory power target (the value all tuning starts from) is
+            # always offered as a marked base step, even if it isn't on the grid.
+            factory = self._lib_target("default_power_target")
+            factory_lvl = int(round(factory)) if factory else None
+            if factory_lvl is not None:
+                levels.add(factory_lvl)
             eff = getattr(self.c, "efficiency", None)
             sk = getattr(self.c, "sampling_key", None)
             out = []
@@ -214,7 +237,8 @@ class SteppedPowerProvider(LevelProvider):
                     suffix = eff.label_suffix(str(lvl), sampling=(sk == str(lvl)))
                 else:
                     suffix = PLACEHOLDER
-                out.append(f"{lvl} W · {suffix}")
+                tag = " Werk ·" if lvl == factory_lvl else ""
+                out.append(f"{lvl} W ·{tag} {suffix}")
             return out
         except Exception:  # noqa: BLE001
             return []

@@ -23,6 +23,7 @@ class FaultLightSwitch(MinerEntity, SwitchEntity):
     def __init__(self, coordinator: MinerCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._device_unique_id}_fault_light"
+        self._apply_naming("switch")
 
     @property
     def is_on(self) -> bool | None:
@@ -56,6 +57,7 @@ class MiningSwitch(MinerEntity, SwitchEntity):
     def __init__(self, coordinator: MinerCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._device_unique_id}_mining"
+        self._apply_naming("switch")
 
     @property
     def is_on(self) -> bool | None:
@@ -78,17 +80,16 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: MinerCoordinator = hass.data[DOMAIN][entry.entry_id]
-    miner = coordinator.miner
 
     entities: list[MinerEntity] = []
 
-    # These are gated on miner capability flags. When the miner is None (offline
-    # at startup) we cannot know them, so we skip these native entities; they
-    # appear after the first successful connection + a reload.
-    if miner is not None and miner.supports_set_fault_light:
+    # Gated on CACHED capabilities (coordinator.supports_*), so these native
+    # entities also appear when the miner is offline at startup (unavailable,
+    # no reload) and recover when it returns.
+    if coordinator.supports_set_fault_light:
         entities.append(FaultLightSwitch(coordinator))
 
-    if miner is not None and miner.supports_pause and miner.supports_resume:
+    if coordinator.supports_pause and coordinator.supports_resume:
         entities.append(MiningSwitch(coordinator))
 
     async_add_entities(entities)

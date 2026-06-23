@@ -376,6 +376,14 @@ MINER_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
         value_fn=_primary_pool_url,
         available_fn=lambda d: _primary_pool_url(d) is not None,
     ),
+    MinerSensorEntityDescription(
+        key="firmware_version",
+        name="Firmware",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:chip",
+        value_fn=lambda d: d.firmware_version,
+        available_fn=lambda d: d.firmware_version is not None,
+    ),
 )
 
 # Members of Miner-Summary that only make sense on liquid-cooled miners. When the
@@ -556,6 +564,7 @@ class MinerSensorEntity(MinerEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{self._device_unique_id}_{description.key}"
+        self._apply_naming("sensor")
         if description.icon is None:
             icon = _icon_for(description.key)
             if icon is not None:
@@ -590,6 +599,7 @@ class MinerSafetyReasonSensor(MinerEntity, SensorEntity):
     def __init__(self, coordinator: MinerCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._device_unique_id}_safety_alarm_reason"
+        self._apply_naming("sensor")
 
     @property
     def native_value(self) -> str:
@@ -644,6 +654,7 @@ class PowerLevelsStatusSensor(MinerEntity, SensorEntity):
     def __init__(self, coordinator: MinerCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._device_unique_id}_power_levels_status"
+        self._apply_naming("sensor")
 
     def _emap(self) -> dict:
         eff = getattr(self.coordinator, "efficiency", None)

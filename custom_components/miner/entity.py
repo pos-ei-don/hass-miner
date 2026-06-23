@@ -10,9 +10,23 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
-from .const import DOMAIN
+from .const import CONF_SIMPLE_NAMING, DEFAULT_SIMPLE_NAMING, DOMAIN
 from .coordinator import MinerCoordinator
+
+
+def naming_object_id(slug: str, device_unique_id: str, unique_id: str) -> str:
+    """Deterministic object_id for an entity under simple_naming (#625).
+
+    "miner_<slug>_<key>", where <key> is the entity's unique_id with the
+    per-device prefix stripped (every entity sets unique_id = "<device>_<key>").
+    Used both for fresh registrations (MinerEntity._apply_naming) and the
+    explicit migration button (ApplyNamingButton).
+    """
+    prefix = f"{device_unique_id}_"
+    key = unique_id[len(prefix):] if unique_id.startswith(prefix) else unique_id
+    return f"{DOMAIN}_{slug}_{key}"
 
 
 @callback
@@ -48,6 +62,14 @@ class MinerEntity(CoordinatorEntity[MinerCoordinator]):
 
     def __init__(self, coordinator: MinerCoordinator) -> None:
         super().__init__(coordinator)
+        # Naming (#625): read simple_naming + a stable slug from the config entry
+        # title. The slug drives deterministic entity_ids; falls back to the IP
+        # when there is no entry/title. Tolerates a missing entry (never raises).
+        entry = coordinator.hass.config_entries.async_get_entry(coordinator.entry_id)
+        self._simple_naming = bool(
+            entry.options.get(CONF_SIMPLE_NAMING, DEFAULT_SIMPLE_NAMING)
+        ) if entry else DEFAULT_SIMPLE_NAMING
+        self._name_slug = slugify((entry.title if entry else None) or coordinator.ip)
         # Build device_info from the coordinator helpers, which prefer live data
         # and fall back to the cached profile. They tolerate the fully-offline,
         # never-seen case (everything None) — we then use the IP-based identifier
@@ -76,3 +98,15 @@ class MinerEntity(CoordinatorEntity[MinerCoordinator]):
         if mac:
             return mac.replace(":", "").lower()
         return self.coordinator.ip
+
+    def _apply_naming(self, platform_domain: str) -> None:
+        """Suggest a deterministic entity_id (#625), called by each platform
+        after unique_id is set. Only honored at FIRST registration — existing
+        entities keep their entity_id (use the "Apply naming scheme" button to
+        migrate). No-op when simple_naming is off or unique_id is unset."""
+        if not self._simple_naming or not self._attr_unique_id:
+            return
+        object_id = naming_object_id(
+            self._name_slug, self._device_unique_id, self._attr_unique_id
+        )
+        self.entity_id = f"{platform_domain}.{object_id}"

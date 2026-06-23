@@ -61,3 +61,11 @@ DEFAULT_ENABLE_POWER_LEVELS = True
 DEFAULT_POWER_STEP = 200
 MIN_POWER_STEP = 50
 MAX_POWER_STEP = 1000
+
+# Entity-naming (#625): when simple_naming is on, entity_ids are generated
+# deterministically as "<platform>.miner_<slug>_<key>" from the config-entry
+# title (slugified) instead of being derived from the (long) device name. This
+# only affects NEW registrations; existing entities are migrated only via the
+# explicit "Apply naming scheme" button.
+CONF_SIMPLE_NAMING = "simple_naming"
+DEFAULT_SIMPLE_NAMING = True

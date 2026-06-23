@@ -7,7 +7,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import vnish
@@ -30,6 +29,7 @@ class PowerLimitNumber(MinerEntity, NumberEntity):
     def __init__(self, coordinator: MinerCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._device_unique_id}_power_limit"
+        self._apply_naming("number")
 
     @property
     def native_value(self) -> float | None:
@@ -48,10 +48,10 @@ class PowerLimitNumber(MinerEntity, NumberEntity):
 
 
 class VnishThrottleNumber(MinerEntity, NumberEntity):
-    """[BETA] Set the VNish throttle (percent of full power).
+    """Set the VNish throttle (percent of full power, 100 = unthrottled).
 
-    asic-rs is read-only for VNish power, so this drives the VNish REST API
-    directly (see vnish.py). Replace once asic-rs supports VNish writes.
+    Native since asic-rs 0.7.0.1: reads ``MinerData.throttle_percent`` and writes
+    via ``miner.set_throttle()`` (the firmware accepts 20..100). No REST shim.
     """
 
     _attr_name = "VNish Throttle"
@@ -65,21 +65,19 @@ class VnishThrottleNumber(MinerEntity, NumberEntity):
     def __init__(self, coordinator: MinerCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._device_unique_id}_vnish_throttle"
+        self._apply_naming("number")
 
     @property
     def native_value(self) -> float | None:
-        return self.coordinator.vnish_throttle
+        data = self.coordinator.data
+        return data.throttle_percent if data is not None else None
 
     async def async_set_native_value(self, value: float) -> None:
-        session = async_get_clientsession(self.hass)
-        ok, msg = await vnish.set_throttle(
-            session, self.coordinator.ip, self.coordinator.password, int(value)
-        )
-        if ok:
-            self.coordinator.vnish_throttle = int(value)
-            self.async_write_ha_state()
-        else:
-            raise HomeAssistantError(f"VNish throttle {int(value)}% failed: {msg}")
+        if self.coordinator.miner is None:
+            raise HomeAssistantError("miner not connected")
+        ok = await self.coordinator.miner.set_throttle(int(value))
+        if not ok:
+            raise HomeAssistantError(f"VNish throttle {int(value)}% failed")
         await self.coordinator.async_request_refresh()
 
 
@@ -92,13 +90,10 @@ async def async_setup_entry(
 
     entities: list[MinerEntity] = []
 
-    # Native PowerLimit is gated on a miner capability flag. When the miner is
-    # None (offline at startup) we cannot know it, so we skip the native entity;
-    # it appears after the first successful connection + a reload.
-    if (
-        coordinator.miner is not None
-        and coordinator.miner.supports_set_power_limit
-    ):
+    # Native PowerLimit gated on a CACHED capability (coordinator.supports_*),
+    # so the entity also appears when the miner is offline at startup (shown
+    # unavailable, no reload needed) and recovers when it returns.
+    if coordinator.supports_set_power_limit:
         entities.append(PowerLimitNumber(coordinator))
 
     # BETA: VNish throttle for VNish-firmware miners (asic-rs read-only here).
