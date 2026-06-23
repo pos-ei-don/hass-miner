@@ -1,0 +1,147 @@
+# Entity services registered by the miner integration.
+# Names/descriptions are shown directly in the UI (no `services` block in
+# translations yet). Keep this file in sync when (de)registering services in
+# select.py / update.py / timezone.py.
+
+reset_efficiency:
+  name: Effizienz zurücksetzen
+  description: >-
+    Verwirft die gelernten Effizienz-/Hashrate-Werte einer Leistungsstufe (oder
+    aller Stufen). Danach lernt die Integration die Werte für die betroffene(n)
+    Stufe(n) neu.
+  target:
+    entity:
+      integration: miner
+      domain: select
+  fields:
+    level:
+      name: Leistungsstufe
+      description: >-
+        Die Stufe, deren gelernte Werte verworfen werden (z. B. "3000 W" oder
+        ein VNish-Preset-Name). Leer lassen, um alle Stufen zurückzusetzen.
+      required: false
+      example: "3000 W"
+      selector:
+        text:
+
+set_efficiency:
+  name: Effizienz festlegen
+  description: >-
+    Hinterlegt eine bekannte Hashrate und/oder Effizienz für eine Leistungsstufe
+    und fixiert ("pinnt") sie standardmäßig, sodass das Selbstlernen diese Stufe
+    nicht mehr überschreibt.
+  target:
+    entity:
+      integration: miner
+      domain: select
+  fields:
+    level:
+      name: Leistungsstufe
+      description: Die Stufe, für die der Wert gesetzt wird (z. B. "3000 W").
+      required: true
+      example: "3000 W"
+      selector:
+        text:
+    hashrate:
+      name: Hashrate
+      description: Erwartete Hashrate für diese Stufe in TH/s.
+      required: false
+      example: 100
+      selector:
+        number:
+          min: 0
+          max: 100000
+          step: 0.1
+          unit_of_measurement: TH/s
+          mode: box
+    efficiency:
+      name: Effizienz
+      description: Erwartete Effizienz für diese Stufe in J/TH.
+      required: false
+      example: 30
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          unit_of_measurement: J/TH
+          mode: box
+    pin:
+      name: Fixieren
+      description: >-
+        Wenn aktiviert (Standard), wird der Wert fixiert und vom Selbstlernen
+        nicht mehr verändert.
+      required: false
+      default: true
+      selector:
+        boolean:
+
+set_power_range:
+  name: Leistungsbereich festlegen
+  description: >-
+    Definiert Minimum, Maximum und Schrittweite (in Watt) für die generierten
+    Leistungsstufen. Wird gespeichert und lädt die Integration neu, sodass die
+    Stufen neu erzeugt werden.
+  target:
+    entity:
+      integration: miner
+      domain: select
+  fields:
+    min:
+      name: Minimum
+      description: Untere Grenze der Leistungsstufen in Watt.
+      required: false
+      example: 1500
+      selector:
+        number:
+          min: 0
+          max: 100000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    max:
+      name: Maximum
+      description: Obere Grenze der Leistungsstufen in Watt.
+      required: false
+      example: 3500
+      selector:
+        number:
+          min: 0
+          max: 100000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+    step:
+      name: Schrittweite
+      description: Abstand zwischen den Leistungsstufen in Watt (Standard 200 W).
+      required: false
+      example: 200
+      selector:
+        number:
+          min: 1
+          max: 10000
+          step: 1
+          unit_of_measurement: W
+          mode: box
+
+sync_timezone:
+  name: Zeitzone abgleichen
+  description: >-
+    Gleicht die Zeitzone des Miners sofort mit der von Home Assistant ab (inkl.
+    Sommer-/Winterzeit bei Firmware ohne eigene DST-Logik). Gibt den Status des
+    Abgleichs zurück.
+  target:
+    entity:
+      integration: miner
+      domain: select
+
+check_firmware_update:
+  name: Firmware-Update prüfen
+  description: >-
+    Prüft on-demand, ob für den Miner eine neuere Firmware verfügbar ist
+    (BOS lokal bzw. VNish über die Hersteller-Cloud), und gibt das Ergebnis
+    zurück.
+  target:
+    entity:
+      integration: miner
+      domain: update
