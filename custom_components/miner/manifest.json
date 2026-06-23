@@ -12,5 +12,5 @@
   "requirements": [
     "pyasic-rs @ https://github.com/pos-ei-don/asic-rs/releases/download/wheels-vnish-24/pyasic_rs-0.7.0.5-cp314-cp314-musllinux_1_2_x86_64.whl"
   ],
-  "version": "2.0.0-alpha39"
+  "version": "2.0.0-alpha40"
 }
