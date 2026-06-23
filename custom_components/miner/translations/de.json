@@ -64,7 +64,9 @@
           "power_entity": "Strom-Schalter-Entität (optional)",
           "boot_timeout": "Boot-Timeout (Sekunden)",
           "password": "Firmware-Web-Passwort (BETA, für VNish)",
-          "simple_naming": "Einfaches Entity-Naming"
+          "simple_naming": "Einfaches Entity-Naming",
+          "timezone_check": "Miner-Zeitzone synchron halten (inkl. Sommer-/Winterzeit)",
+          "timezone_mode": "Umgang mit abweichender Zeitzone"
         },
         "data_description": {
           "sensor_categories": "Gewünschte Gruppen ankreuzen. Abgewählte Gruppen werden beim Neuladen entfernt.",
@@ -72,7 +74,9 @@
           "scan_interval": "Wie oft der Miner abgefragt wird. Niedriger = frischere Daten, aber mehr Last auf dem Miner (Default 30 s).",
           "power_entity": "Wenn gesetzt, pausiert das Polling solange dieser Schalter/Sensor aus ist und läuft nach dem Einschalten in einer schnellen Boot-Schleife. Leer lassen für dauerhaftes Polling.",
           "boot_timeout": "Wie lange nach dem Einschalten auf den Miner gewartet wird, bevor der Boot-Timeout-Alarm ausgelöst wird (Default 120 s).",
-          "simple_naming": "Erzeugt deterministische entity_ids „miner_<name>_<key>“ aus dem Eintragsnamen für NEUE Entities. Bestehende Entities werden nur über den Knopf „Namensschema anwenden“ migriert."
+          "simple_naming": "Erzeugt deterministische entity_ids „miner_<name>_<key>“ aus dem Eintragsnamen für NEUE Entities. Bestehende Entities werden nur über den Knopf „Namensschema anwenden“ migriert.",
+          "timezone_check": "Wenn gesetzt, wird die Zeitzone des Miners regelmäßig und beim Start mit der von Home Assistant konfigurierten Zone abgeglichen. VNish-Miner kennen keine Sommer-/Winterzeit, daher wird der korrekte Offset bei jeder Zeitumstellung neu gesetzt.",
+          "timezone_mode": "„auto“ korrigiert eine Abweichung automatisch; „repair“ meldet nur ein behebbares Problem zur Bestätigung."
         }
       }
     }
@@ -85,6 +89,25 @@
         "board_temps": "Pro-Board-Temperaturen (PCB-Board + Inlet-/Outlet-Chip-Temperaturen)",
         "board_perf": "Pro-Board-Leistung (Hashrate / Spannung / Frequenz / Chips)",
         "fans": "Lüfter (RPM)"
+      }
+    },
+    "timezone_mode": {
+      "options": {
+        "auto": "Automatisch korrigieren",
+        "repair": "Nur Reparatur-Hinweis melden"
+      }
+    }
+  },
+  "issues": {
+    "timezone_mismatch": {
+      "title": "Miner-Zeitzone nicht synchron",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Miner-Zeitzone korrigieren",
+            "description": "Die Zeitzone auf {name} ist „{current}“, sollte aber „{target}“ sein (aus der in Home Assistant konfigurierten Zone). Bestätige, um die korrekte Zeitzone auf dem Miner zu setzen."
+          }
+        }
       }
     }
   }

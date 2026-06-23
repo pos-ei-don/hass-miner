@@ -62,6 +62,20 @@ DEFAULT_POWER_STEP = 200
 MIN_POWER_STEP = 50
 MAX_POWER_STEP = 1000
 
+# ── Options: timezone management ─────────────────────────────────────────────
+# Let HA keep the miner's timezone correct, including across DST. BraiinsOS takes
+# a named IANA zone and handles DST itself; VNish takes a fixed "GMT±N" offset
+# and has NO DST, so the correct offset must be (re)applied at each DST change.
+# ``timezone_check`` enables the periodic + startup auto-sync; ``timezone_mode``
+# picks whether a mismatch is corrected automatically ("auto") or only surfaced
+# as a repair issue for the user to confirm ("repair").
+CONF_TZ_CHECK = "timezone_check"
+DEFAULT_TZ_CHECK = False
+CONF_TZ_MODE = "timezone_mode"
+TZ_MODE_AUTO = "auto"
+TZ_MODE_REPAIR = "repair"
+DEFAULT_TZ_MODE = TZ_MODE_AUTO
+
 # Entity-naming (#625): when simple_naming is on, entity_ids are generated
 # deterministically as "<platform>.miner_<slug>_<key>" from the config-entry
 # title (slugified) instead of being derived from the (long) device name. This

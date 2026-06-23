@@ -201,6 +201,9 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             "supports_check_firmware_update": bool(
                 getattr(self.miner, "supports_check_firmware_update", False)
             ),
+            "supports_timezone_config": bool(
+                getattr(self.miner, "supports_timezone_config", False)
+            ),
         }
         if profile != self.profile:
             self.profile = profile
@@ -309,6 +312,10 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
     @property
     def supports_check_firmware_update(self) -> bool:
         return self._supports("supports_check_firmware_update")
+
+    @property
+    def supports_timezone_config(self) -> bool:
+        return self._supports("supports_timezone_config")
 
     # ── Setup / update ─────────────────────────────────────────────────────
 

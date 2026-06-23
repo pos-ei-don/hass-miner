@@ -64,7 +64,9 @@
           "power_entity": "Power switch entity (optional)",
           "boot_timeout": "Boot timeout (seconds)",
           "password": "Firmware web password (BETA, for VNish)",
-          "simple_naming": "Simple entity naming"
+          "simple_naming": "Simple entity naming",
+          "timezone_check": "Keep miner timezone in sync (incl. DST)",
+          "timezone_mode": "Timezone mismatch handling"
         },
         "data_description": {
           "sensor_categories": "Tick the groups to create. Unticked groups are removed on reload.",
@@ -72,7 +74,9 @@
           "scan_interval": "How often to poll the miner. Lower = fresher data but more load on the miner (default 30 s).",
           "power_entity": "If set, polling pauses while this switch/sensor is off, then runs a fast boot loop after power-on. Leave empty to always poll.",
           "boot_timeout": "How long to wait for the miner to come up after power-on before raising the boot-timeout alarm (default 120 s).",
-          "simple_naming": "Generate deterministic entity_ids “miner_<name>_<key>” from the entry name for NEW entities. Existing entities are migrated only via the “Apply naming scheme” button."
+          "simple_naming": "Generate deterministic entity_ids “miner_<name>_<key>” from the entry name for NEW entities. Existing entities are migrated only via the “Apply naming scheme” button.",
+          "timezone_check": "When set, the miner's timezone is checked periodically and at startup against Home Assistant's own zone. VNish miners have no DST, so the correct offset is re-applied at each DST change.",
+          "timezone_mode": "“auto” corrects a mismatch automatically; “repair” only raises a repairable issue for you to confirm."
         }
       }
     }
@@ -85,6 +89,25 @@
         "board_temps": "Per-board temperatures (PCB board + inlet/outlet chip temps)",
         "board_perf": "Per-board performance (hashrate / voltage / frequency / chips)",
         "fans": "Fans (RPM)"
+      }
+    },
+    "timezone_mode": {
+      "options": {
+        "auto": "Correct automatically",
+        "repair": "Raise a repair issue only"
+      }
+    }
+  },
+  "issues": {
+    "timezone_mismatch": {
+      "title": "Miner timezone out of sync",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Fix miner timezone",
+            "description": "The timezone on {name} is “{current}” but should be “{target}” (from Home Assistant's configured zone). Confirm to set the correct timezone on the miner."
+          }
+        }
       }
     }
   }

@@ -38,6 +38,8 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SENSOR_CATEGORIES,
     CONF_SIMPLE_NAMING,
+    CONF_TZ_CHECK,
+    CONF_TZ_MODE,
     DEFAULT_BOOT_TIMEOUT,
     DEFAULT_ENABLE_POWER_LEVELS,
     DEFAULT_SIMPLE_NAMING,
@@ -45,7 +47,11 @@ from .const import (
     DEFAULT_POWER_STEP,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SENSOR_CATEGORIES,
+    DEFAULT_TZ_CHECK,
+    DEFAULT_TZ_MODE,
     DOMAIN,
+    TZ_MODE_AUTO,
+    TZ_MODE_REPAIR,
     MAX_BOOT_TIMEOUT,
     MAX_POWER_STEP,
     MAX_SCAN_INTERVAL,
@@ -303,6 +309,8 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
         current_power_step = options.get(CONF_POWER_STEP, DEFAULT_POWER_STEP)
         current_power_min = options.get(CONF_POWER_MIN)  # None ⇒ heuristic
         current_power_max = options.get(CONF_POWER_MAX)  # None ⇒ heuristic
+        current_tz_check = options.get(CONF_TZ_CHECK, DEFAULT_TZ_CHECK)
+        current_tz_mode = options.get(CONF_TZ_MODE, DEFAULT_TZ_MODE)
 
         categories_select = SelectSelector(
             SelectSelectorConfig(
@@ -356,6 +364,16 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                 mode=NumberSelectorMode.BOX,
             )
         )
+        tz_mode_select = SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(value=TZ_MODE_AUTO, label=TZ_MODE_AUTO),
+                    SelectOptionDict(value=TZ_MODE_REPAIR, label=TZ_MODE_REPAIR),
+                ],
+                translation_key=CONF_TZ_MODE,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -402,6 +420,15 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_SIMPLE_NAMING, default=current_simple_naming
                     ): BooleanSelector(),
+                    # Timezone management: keep the miner's zone in sync with HA
+                    # (incl. DST). `timezone_check` enables the periodic + startup
+                    # auto-sync; `timezone_mode` picks auto-correct vs. repair-only.
+                    vol.Optional(
+                        CONF_TZ_CHECK, default=current_tz_check
+                    ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_TZ_MODE, default=current_tz_mode
+                    ): tz_mode_select,
                     vol.Optional(CONF_PASSWORD, default=current_password): str,
                 }
             ),

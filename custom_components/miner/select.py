@@ -39,6 +39,7 @@ from .level_providers import (
     SteppedPowerProvider,
     VnishPresetProvider,
 )
+from . import timezone as tz_platform
 
 
 class PowerLevelSelect(MinerEntity, SelectEntity):
@@ -199,3 +200,8 @@ async def async_setup_entry(
             )
 
     async_add_entities(entities)
+
+    # Timezone management is also a `select` entity — wire it through here so it
+    # lives under the already-registered Platform.SELECT (no new platform). This
+    # also registers the `miner.sync_timezone` service and the optional auto-sync.
+    await tz_platform.async_setup_entry(hass, entry, async_add_entities)
