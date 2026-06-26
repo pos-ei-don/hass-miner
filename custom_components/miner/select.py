@@ -180,10 +180,7 @@ async def async_setup_entry(
                     icon="mdi:speedometer",
                 )
             )
-        elif (
-            coordinator.miner is not None
-            and coordinator.miner.supports_set_power_limit
-        ):
+        elif coordinator.supports_set_power_limit:
             entities.append(
                 PowerLevelSelect(
                     coordinator,
