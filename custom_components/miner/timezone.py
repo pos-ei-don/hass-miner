@@ -201,6 +201,14 @@ async def async_sync_timezone(
     target = _target_timezone(coordinator)
     if target is None:
         return {"status": "no_target"}
+    if current is None:
+        # We couldn't read the miner's timezone (e.g. it was briefly offline /
+        # the config call failed). That is "unknown", NOT a mismatch — never
+        # raise a repair on a failed read, or we'd flag a false "timezone is
+        # unknown" whenever the device blips. Leave any existing issue as-is; a
+        # later sync with the miner online resolves it via the current==target
+        # branch. (Mirrors the offline-robustness of the other entities.)
+        return {"status": "unread"}
     if current == target:
         # Already in sync — make sure no stale repair issue lingers.
         _delete_issue(hass, coordinator)
