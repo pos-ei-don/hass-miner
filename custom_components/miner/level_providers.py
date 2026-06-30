@@ -21,6 +21,7 @@ import re
 
 from homeassistant.exceptions import HomeAssistantError
 
+from pyasic_rs import TuningConfig
 from pyasic_rs.data import HashRateUnit
 
 from . import vnish
@@ -115,8 +116,9 @@ class VnishPresetProvider(LevelProvider):
     async def apply(self, option: str) -> None:
         name = self._name_for(option)
         # Native: select the preset via the library (auth via set_auth).
-        ok = await self.c.miner.set_preset(name)
-        if not ok:
+        # asic-rs 0.7.1 (#289/#291): set_preset -> set_tuning_config(preset).
+        ok = await self.c.miner.set_tuning_config(TuningConfig.preset(name))
+        if ok is False:
             raise HomeAssistantError(f"VNish preset '{name}' failed")
         self.c.vnish_preset = name
 

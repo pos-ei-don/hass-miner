@@ -464,8 +464,13 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             self.vnish_throttle, self.vnish_state = await vnish.fetch_status(
                 session, self.ip
             )
-            if self.password:
-                # Native: current preset from the library (auth via set_auth).
-                self.vnish_preset = await self.miner.get_current_preset()
+            # asic-rs 0.7.1: current preset = get_tuning_target().preset_name.
+            # VNish exposes the active autotune preset UNAUTHENTICATED, so this is
+            # NOT gated on a configured password — otherwise the preset select
+            # stays empty/unknown on password-less entries (e.g. hydro1).
+            target = await self.miner.get_tuning_target()
+            self.vnish_preset = (
+                target.preset_name if target is not None else None
+            )
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("VNish extra-poll failed for %s: %s", self.ip, err)

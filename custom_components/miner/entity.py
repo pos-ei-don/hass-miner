@@ -12,7 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
-from .const import CONF_SIMPLE_NAMING, DEFAULT_SIMPLE_NAMING, DOMAIN
+from .const import CONF_MAC, CONF_SIMPLE_NAMING, DEFAULT_SIMPLE_NAMING, DOMAIN
 from .coordinator import MinerCoordinator
 
 
@@ -93,7 +93,31 @@ class MinerEntity(CoordinatorEntity[MinerCoordinator]):
 
     @property
     def _device_unique_id(self) -> str:
-        """Stable device identifier: prefer MAC (live or cached) over IP."""
+        """Stable device identity (#672).
+
+        Order: persisted MAC (entry.data) > live/cached MAC > IP.
+
+        The persisted MAC is the key improvement: once the MAC is ever seen it is
+        written to entry.data and used forever, so the identity no longer flips
+        between MAC and IP depending on whether the miner happened to be online at
+        setup (the bug that orphaned entities and spawned a duplicate device). On
+        first MAC sighting, async_setup_entry also migrates any IP-prefixed
+        registry rows to the MAC.
+
+        The IP remains the *last* resort, only for miners whose firmware/library
+        exposes no MAC at all (e.g. some stock Antminer firmware via asic-rs,
+        where ``data.mac is None``). It is intentionally NOT changed to something
+        like entry_id, because re-keying an existing MAC-less miner would orphan
+        its entities. For those miners the correct long-term fix is to obtain a
+        real hardware id (MAC/serial) from the library; until then the IP (pinned
+        by a static DHCP reservation) is the only stable handle available.
+        """
+        entry = self.coordinator.hass.config_entries.async_get_entry(
+            self.coordinator.entry_id
+        )
+        persisted = entry.data.get(CONF_MAC) if entry else None
+        if persisted:
+            return persisted
         mac = self.coordinator.device_mac
         if mac:
             return mac.replace(":", "").lower()

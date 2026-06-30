@@ -2,6 +2,13 @@
 
 DOMAIN = "miner"
 
+# ── Stable device identity (#672) ───────────────────────────────────────────
+# The miner's MAC, persisted in entry.data once known. It is the canonical
+# device identifier (unique_id prefix + DeviceInfo identifiers). It must NEVER
+# be derived from the IP/host: IPs are DHCP-mutable, and an IP-based identity
+# orphans entities + duplicates devices when the address changes.
+CONF_MAC = "mac"
+
 # ── Options: polling ────────────────────────────────────────────────────────
 CONF_SCAN_INTERVAL = "scan_interval"
 DEFAULT_SCAN_INTERVAL = 30  # seconds

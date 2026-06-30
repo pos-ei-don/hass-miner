@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_BOOT_TIMEOUT,
+    CONF_MAC,
     CONF_POWER_ENTITY,
     CONF_SCAN_INTERVAL,
     DEFAULT_BOOT_TIMEOUT,
@@ -16,6 +21,8 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import MinerCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [
     Platform.SENSOR,
@@ -64,10 +71,90 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "profile exists yet"
         )
 
+    # Stabilize the device identity (#672) BEFORE platforms create entities:
+    # once the MAC is known, persist it and migrate any registry rows that still
+    # carry a stale (IP/entry_id) prefix to the MAC. Doing this first means the
+    # platforms re-attach to the migrated rows (same entity_id, no orphan) and
+    # land on the canonical MAC device.
+    _async_stabilize_identity(hass, entry, coordinator)
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True
+
+
+def _async_stabilize_identity(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator: MinerCoordinator
+) -> None:
+    """Pin device identity to the MAC and migrate stale prefixes (#672).
+
+    No-op until a MAC is known (online once, or cached profile). Until then the
+    entities use the entry_id placeholder; this runs again on the next setup and
+    migrates them as soon as the MAC appears. Idempotent.
+    """
+    mac = coordinator.device_mac
+    if not mac:
+        return
+    canonical = mac.replace(":", "").lower()
+
+    # 1) Persist the MAC so the identity is stable across IP changes / offline
+    #    restarts and independent of live availability.
+    if entry.data.get(CONF_MAC) != canonical:
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_MAC: canonical}
+        )
+
+    # 2) Migrate registry rows whose unique_id still carries an old prefix.
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    for row in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+        uid = row.unique_id
+        if uid == canonical or uid.startswith(f"{canonical}_"):
+            continue
+        new_uid = _remap_unique_id(uid, canonical, row, dev_reg, coordinator)
+        if not new_uid or new_uid == uid:
+            continue
+        # Collision guard: if the canonical row already exists (e.g. a partial
+        # earlier migration), drop the stale duplicate instead of colliding.
+        existing = ent_reg.async_get_entity_id(row.domain, DOMAIN, new_uid)
+        if existing and existing != row.entity_id:
+            _LOGGER.info(
+                "miner identity migration: removing stale duplicate %s (%s); "
+                "canonical %s already exists",
+                row.entity_id, uid, new_uid,
+            )
+            ent_reg.async_remove(row.entity_id)
+        else:
+            _LOGGER.info(
+                "miner identity migration: %s unique_id %s -> %s",
+                row.entity_id, uid, new_uid,
+            )
+            ent_reg.async_update_entity(row.entity_id, new_unique_id=new_uid)
+
+
+def _remap_unique_id(uid, canonical, row, dev_reg, coordinator):
+    """Return the MAC-prefixed unique_id for a row carrying an old prefix.
+
+    The old prefix is the entity's former _device_unique_id value. Candidates,
+    in order: the (DOMAIN, x) identifiers of the entity's device, then the IP and
+    the entry_id. The first candidate that the unique_id starts with wins; its
+    leading segment is swapped for the canonical MAC. Returns None if no
+    candidate matches (then the row is left untouched).
+    """
+    candidates: list[str] = []
+    if row.device_id:
+        device = dev_reg.async_get(row.device_id)
+        if device:
+            candidates.extend(
+                ident for domain, ident in device.identifiers if domain == DOMAIN
+            )
+    candidates.append(coordinator.ip)
+    candidates.append(coordinator.entry_id)
+    for prefix in candidates:
+        if prefix and prefix != canonical and uid.startswith(f"{prefix}_"):
+            return f"{canonical}_{uid[len(prefix) + 1:]}"
+    return None
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

@@ -50,8 +50,9 @@ class PowerLimitNumber(MinerEntity, NumberEntity):
 class VnishThrottleNumber(MinerEntity, NumberEntity):
     """Set the VNish throttle (percent of full power, 100 = unthrottled).
 
-    Native since asic-rs 0.7.0.1: reads ``MinerData.throttle_percent`` and writes
-    via ``miner.set_throttle()`` (the firmware accepts 20..100). No REST shim.
+    Native: reads ``MinerData.tuning_percent`` and writes via
+    ``miner.set_tuning_percent()`` (the firmware accepts 20..100). No REST shim.
+    (Renamed from throttle in asic-rs 0.7.1 — #289.)
     """
 
     _attr_name = "VNish Throttle"
@@ -70,13 +71,13 @@ class VnishThrottleNumber(MinerEntity, NumberEntity):
     @property
     def native_value(self) -> float | None:
         data = self.coordinator.data
-        return data.throttle_percent if data is not None else None
+        return data.tuning_percent if data is not None else None
 
     async def async_set_native_value(self, value: float) -> None:
         if self.coordinator.miner is None:
             raise HomeAssistantError("miner not connected")
-        ok = await self.coordinator.miner.set_throttle(int(value))
-        if not ok:
+        ok = await self.coordinator.miner.set_tuning_percent(int(value))
+        if ok is False:
             raise HomeAssistantError(f"VNish throttle {int(value)}% failed")
         await self.coordinator.async_request_refresh()
 
