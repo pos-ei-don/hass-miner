@@ -10,7 +10,7 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Schnitzel/hass-miner/issues",
   "requirements": [
-    "pyasic-rs @ https://github.com/pos-ei-don/asic-rs/releases/download/wheels-vnish-33/pyasic_rs-0.7.1.3-cp314-cp314-musllinux_1_2_x86_64.whl"
+    "pyasic-rs @ https://github.com/pos-ei-don/asic-rs/releases/download/wheels-vnish-37/pyasic_rs-0.8.0.1-cp314-cp314-musllinux_1_2_x86_64.whl"
   ],
-  "version": "2.0.0-alpha47"
+  "version": "2.0.0-alpha48"
 }

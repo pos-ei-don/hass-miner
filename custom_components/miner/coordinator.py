@@ -89,6 +89,16 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         # BOS power config (current/step/min) for set_power_limit miners.
         self.bos_power_config: dict = {}
 
+        # Device thermal safety limits. In pyasic-rs 0.7.x these were flat
+        # MinerData fields (min_startup_temperature / restart_temperature); in
+        # 0.8.0.1 they moved to the TemperatureConfig model, fetched separately
+        # via miner.get_temperature_config() (TemperatureConfig.minimum = cold
+        # startup limit, .danger = hot restart limit). Cached here from each
+        # poll so the safety sensors and the alarm-reason keep working. Last-good
+        # is retained on a transient read failure (never flapped back to None).
+        self.safety_cold_limit: float | None = None
+        self.safety_hot_limit: float | None = None
+
         # ── Power-aware polling state ──────────────────────────────────────
         # When no power_entity is configured, power_on stays True forever and
         # none of the power logic ever fires ⇒ exact legacy behavior.
@@ -407,12 +417,49 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         if self.is_vnish:
             await self._async_update_vnish()
 
+        # Refresh the device thermal safety limits (0.8.0.1: TemperatureConfig,
+        # no longer flat MinerData fields). Defensive: never fails the update,
+        # keeps last-good on a transient read error.
+        await self._async_update_temperature_config()
+
         # Feed the self-learning efficiency map (defensive: never raises).
         self._observe_efficiency(data)
 
         # Persist a fresh device profile so the entry can load offline next time.
         await self._async_store_profile(data)
         return data
+
+    async def _async_update_temperature_config(self) -> None:
+        """Refresh cached thermal safety limits from TemperatureConfig (0.8.0.1).
+
+        ``TemperatureConfig.minimum`` = cold startup limit (was
+        ``MinerData.min_startup_temperature``); ``.danger`` = hot restart limit
+        (was ``MinerData.restart_temperature``). Gated on the capability so
+        firmware without it (stock/older) stays dormant. Never raises; on a
+        transient error the previously cached values are kept.
+        """
+        miner = self.miner
+        if miner is None:
+            return
+        if not getattr(miner, "supports_temperature_config", False):
+            return
+        try:
+            cfg = await miner.get_temperature_config()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "get_temperature_config failed for %s: %s", self.ip, err
+            )
+            return
+        if cfg is None:
+            return
+        # Only overwrite with real values; keep last-good otherwise so a partial
+        # config doesn't blank an already-known limit.
+        cold = getattr(cfg, "minimum", None)
+        hot = getattr(cfg, "danger", None)
+        if cold is not None:
+            self.safety_cold_limit = cold
+        if hot is not None:
+            self.safety_hot_limit = hot
 
     @property
     def sampling_key(self):

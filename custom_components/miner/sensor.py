@@ -91,6 +91,12 @@ def _icon_for(key: str) -> str | None:
 class MinerSensorEntityDescription(SensorEntityDescription):
     value_fn: Callable[[MinerData], Any]
     available_fn: Callable[[MinerData], bool] = lambda _: True
+    # Optional: read the value from a coordinator attribute instead of from
+    # MinerData. Used for values that pyasic-rs 0.8.0.1 no longer exposes on
+    # MinerData but that the coordinator fetches separately (e.g. the thermal
+    # safety limits from TemperatureConfig). When set, ``value_fn`` /
+    # ``available_fn`` are ignored for this description.
+    coord_attr: str | None = None
 
 
 # ── Defensive capability helpers (Schicht B / B1) ───────────────────────────
@@ -221,17 +227,21 @@ def _has_problem(data: MinerData) -> bool:
     return bool(_problem_messages(data))
 
 
-def _alarm_reason(data: MinerData) -> str:
+def _alarm_reason(
+    data: MinerData,
+    cold: float | None = None,
+    hot: float | None = None,
+) -> str:
     """Human-readable alarm reason, aligned to device messages and thermal limits.
 
-    ``OK`` when the miner reports nothing actionable. Device-read limits
-    (``min_startup_temperature`` / ``restart_temperature``) and live temperatures
-    are read defensively, so on stock 0.6.2 (no messages, no limits) this is "OK".
+    ``OK`` when the miner reports nothing actionable. The thermal limits
+    (``cold`` = min-startup, ``hot`` = restart) are passed in from the
+    coordinator's cached TemperatureConfig (pyasic-rs 0.8.0.1 no longer exposes
+    them as flat ``MinerData`` fields); when unknown (None) the corresponding
+    check is skipped, so on stock firmware without limits this stays "OK".
     """
     reasons: list[str] = list(_problem_messages(data))
 
-    hot = getattr(data, "restart_temperature", None)
-    cold = getattr(data, "min_startup_temperature", None)
     maxtemp = _max_temperature(data)
     inlet = getattr(data, "fluid_temperature", None)
 
@@ -398,8 +408,11 @@ _SUMMARY_HYDRO_ONLY = ("fluid_temperature", "outlet_fluid_temperature")
 # rather than a data-only value_fn description.
 
 # The device's OWN configured thermal limits, surfaced as diagnostics so the
-# alarm's comparison values are visible. Schicht B: read defensively, so they
-# only appear when the lib exposes them (dormant on stock 0.6.2).
+# alarm's comparison values are visible. In pyasic-rs 0.8.0.1 these are no
+# longer flat MinerData fields — the coordinator fetches them from
+# TemperatureConfig (minimum/danger) and caches them on
+# ``safety_cold_limit`` / ``safety_hot_limit``, which these read via
+# ``coord_attr``. They stay dormant when the firmware doesn't expose them.
 SAFETY_LIMIT_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
     MinerSensorEntityDescription(
         key="safety_cold_limit",
@@ -408,8 +421,8 @@ SAFETY_LIMIT_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:thermometer-low",
-        value_fn=lambda d: getattr(d, "min_startup_temperature", None),
-        available_fn=lambda d: getattr(d, "min_startup_temperature", None) is not None,
+        value_fn=lambda _d: None,
+        coord_attr="safety_cold_limit",
     ),
     MinerSensorEntityDescription(
         key="safety_hot_limit",
@@ -418,8 +431,8 @@ SAFETY_LIMIT_SENSORS: tuple[MinerSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:thermometer-high",
-        value_fn=lambda d: getattr(d, "restart_temperature", None),
-        available_fn=lambda d: getattr(d, "restart_temperature", None) is not None,
+        value_fn=lambda _d: None,
+        coord_attr="safety_hot_limit",
     ),
 )
 
@@ -572,13 +585,26 @@ class MinerSensorEntity(MinerEntity, SensorEntity):
 
     @property
     def native_value(self) -> Any:
+        # Coordinator-backed values (e.g. thermal safety limits from
+        # TemperatureConfig, 0.8.0.1) live on the coordinator, not on MinerData.
+        if self.entity_description.coord_attr is not None:
+            return getattr(
+                self.coordinator, self.entity_description.coord_attr, None
+            )
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
     def available(self) -> bool:
-        if not self.coordinator.last_update_success or self.coordinator.data is None:
+        if not self.coordinator.last_update_success:
+            return False
+        if self.entity_description.coord_attr is not None:
+            return (
+                getattr(self.coordinator, self.entity_description.coord_attr, None)
+                is not None
+            )
+        if self.coordinator.data is None:
             return False
         return self.entity_description.available_fn(self.coordinator.data)
 
@@ -605,18 +631,20 @@ class MinerSafetyReasonSensor(MinerEntity, SensorEntity):
     def native_value(self) -> str:
         coordinator = self.coordinator
         data = coordinator.data
+        cold = coordinator.safety_cold_limit
+        hot = coordinator.safety_hot_limit
         if coordinator.boot_failed:
             boot_msg = (
                 f"miner did not come online within {coordinator.boot_timeout}s "
                 "after power-on"
             )
             if data is not None:
-                reason = _alarm_reason(data)
+                reason = _alarm_reason(data, cold, hot)
                 if reason and reason != "OK":
                     return f"{boot_msg}; {reason}"
             return boot_msg
         if data is not None:
-            reason = _alarm_reason(data)
+            reason = _alarm_reason(data, cold, hot)
             # VNish treats tuning as a normal state (no message → reason "OK"),
             # but surfacing it as info explains why hashrate is ramping/variable.
             if reason == "OK":
@@ -786,7 +814,17 @@ async def async_setup_entry(
     # everything from the profile; the entities are unavailable anyway until a
     # poll succeeds, and a later reload re-applies the filter.
     if only_available and data is not None:
-        descriptions = [d for d in descriptions if d.available_fn(data)]
+        # coord_attr descriptions aren't derivable from MinerData; gate them on
+        # the coordinator's cached value instead of available_fn(data).
+        descriptions = [
+            d
+            for d in descriptions
+            if (
+                getattr(coordinator, d.coord_attr, None) is not None
+                if d.coord_attr is not None
+                else d.available_fn(data)
+            )
+        ]
 
     # Clean up entities of any category/sensor we are no longer producing
     # (same unique-id scheme as MinerEntity). device_uid prefers MAC (live or
