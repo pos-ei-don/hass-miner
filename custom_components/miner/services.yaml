@@ -3,6 +3,30 @@
 # translations yet). Keep this file in sync when (de)registering services in
 # select.py / update.py / timezone.py.
 
+power_on:
+  name: Miner einschalten
+  description: >-
+    Schaltet die konfigurierte Steckdose (power_switch) des Miners ein. Der
+    Status läuft danach von selbst über „starting“ nach „mining“, sobald der
+    Miner erreichbar ist und hasht. No-op, wenn die Steckdose bereits an ist.
+  target:
+    device:
+      integration: miner
+    entity:
+      integration: miner
+
+power_off:
+  name: Miner ausschalten
+  description: >-
+    Pausiert zuerst das Mining per Firmware (softwareseitig), setzt den Status
+    auf „stopping“, wartet die konfigurierte Verzögerung (shutdown_delay_seconds)
+    ab und schaltet dann die Steckdose (power_switch) aus.
+  target:
+    device:
+      integration: miner
+    entity:
+      integration: miner
+
 reset_efficiency:
   name: Effizienz zurücksetzen
   description: >-

@@ -6,10 +6,11 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, Platform
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.service import async_extract_config_entry_ids
 
 from .const import (
     CONF_BOOT_TIMEOUT,
@@ -19,6 +20,8 @@ from .const import (
     DEFAULT_BOOT_TIMEOUT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    SERVICE_POWER_OFF,
+    SERVICE_POWER_ON,
 )
 from .coordinator import MinerCoordinator
 
@@ -51,6 +54,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     await coordinator.async_setup_power_tracking()
     entry.async_on_unload(coordinator._stop_power_tracking)
+    # Lifecycle-status feature: track the external power sensor's on/off edges
+    # and register the power_on/power_off services (once, integration-wide).
+    await coordinator.async_setup_status_tracking()
+    entry.async_on_unload(coordinator._stop_status_tracking)
+    _async_register_services(hass)
 
     # Offline resilience: load the cached device profile, then do a NON-raising
     # refresh. If the miner is reachable we get live data; if not, we may still
@@ -155,6 +163,40 @@ def _remap_unique_id(uid, canonical, row, dev_reg, coordinator):
         if prefix and prefix != canonical and uid.startswith(f"{prefix}_"):
             return f"{canonical}_{uid[len(prefix) + 1:]}"
     return None
+
+
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Register the integration-orchestrated power services (idempotent).
+
+    These are domain services (not entity services): the target (device/entity/
+    area of this integration) is resolved to the owning config entries, and each
+    entry's coordinator runs the sequence. Registered once; left in place for the
+    lifetime of HA (harmless if all entries are later removed).
+    """
+    if hass.services.has_service(DOMAIN, SERVICE_POWER_ON):
+        return
+
+    async def _coordinators_for(call: ServiceCall) -> list[MinerCoordinator]:
+        entry_ids = await async_extract_config_entry_ids(hass, call)
+        store = hass.data.get(DOMAIN, {})
+        found = [store[eid] for eid in entry_ids if eid in store]
+        if not found:
+            raise HomeAssistantError(
+                "No miner integration targets in the service call. Point the "
+                "service at a miner device or one of its entities."
+            )
+        return found
+
+    async def _handle_power_on(call: ServiceCall) -> None:
+        for coordinator in await _coordinators_for(call):
+            await coordinator.async_power_on()
+
+    async def _handle_power_off(call: ServiceCall) -> None:
+        for coordinator in await _coordinators_for(call):
+            await coordinator.async_power_off()
+
+    hass.services.async_register(DOMAIN, SERVICE_POWER_ON, _handle_power_on)
+    hass.services.async_register(DOMAIN, SERVICE_POWER_OFF, _handle_power_off)
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

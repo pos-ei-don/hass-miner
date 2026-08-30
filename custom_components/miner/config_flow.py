@@ -28,20 +28,28 @@ from homeassistant.helpers.selector import (
 from pyasic_rs import MinerFactory
 
 from .const import (
+    CONF_BOOT_GRACE,
     CONF_BOOT_TIMEOUT,
     CONF_ENABLE_POWER_LEVELS,
+    CONF_MINING_POWER_THRESHOLD_W,
     CONF_ONLY_AVAILABLE,
     CONF_POWER_ENTITY,
     CONF_POWER_MAX,
     CONF_POWER_MIN,
+    CONF_POWER_SENSOR,
     CONF_POWER_STEP,
+    CONF_POWER_SWITCH,
     CONF_SCAN_INTERVAL,
     CONF_SENSOR_CATEGORIES,
+    CONF_SHUTDOWN_DELAY,
     CONF_SIMPLE_NAMING,
     CONF_TZ_CHECK,
     CONF_TZ_MODE,
+    CONF_WARMUP_HASHRATE_FRACTION,
+    DEFAULT_BOOT_GRACE,
     DEFAULT_BOOT_TIMEOUT,
     DEFAULT_ENABLE_POWER_LEVELS,
+    DEFAULT_SHUTDOWN_DELAY,
     DEFAULT_SIMPLE_NAMING,
     DEFAULT_ONLY_AVAILABLE,
     DEFAULT_POWER_STEP,
@@ -49,6 +57,7 @@ from .const import (
     DEFAULT_SENSOR_CATEGORIES,
     DEFAULT_TZ_CHECK,
     DEFAULT_TZ_MODE,
+    DEFAULT_WARMUP_HASHRATE_FRACTION,
     DOMAIN,
     TZ_MODE_AUTO,
     TZ_MODE_REPAIR,
@@ -285,6 +294,14 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
             # preserve it). Treat empty/absent as "cleared".
             if not user_input.get(CONF_POWER_ENTITY):
                 data.pop(CONF_POWER_ENTITY, None)
+            # Same "clear when emptied" rule for the status-feature entity fields
+            # and the optional mining-power threshold.
+            if not user_input.get(CONF_POWER_SENSOR):
+                data.pop(CONF_POWER_SENSOR, None)
+            if not user_input.get(CONF_POWER_SWITCH):
+                data.pop(CONF_POWER_SWITCH, None)
+            if user_input.get(CONF_MINING_POWER_THRESHOLD_W) in (None, ""):
+                data.pop(CONF_MINING_POWER_THRESHOLD_W, None)
             return self.async_create_entry(title="", data=data)
 
         options = self.config_entry.options
@@ -311,6 +328,17 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
         current_power_max = options.get(CONF_POWER_MAX)  # None ⇒ heuristic
         current_tz_check = options.get(CONF_TZ_CHECK, DEFAULT_TZ_CHECK)
         current_tz_mode = options.get(CONF_TZ_MODE, DEFAULT_TZ_MODE)
+        # Status feature (lifecycle status sensor + power services).
+        current_power_sensor = options.get(CONF_POWER_SENSOR, "")
+        current_power_switch = options.get(CONF_POWER_SWITCH, "")
+        current_boot_grace = options.get(CONF_BOOT_GRACE, DEFAULT_BOOT_GRACE)
+        current_shutdown_delay = options.get(
+            CONF_SHUTDOWN_DELAY, DEFAULT_SHUTDOWN_DELAY
+        )
+        current_mining_threshold = options.get(CONF_MINING_POWER_THRESHOLD_W)
+        current_warmup_fraction = options.get(
+            CONF_WARMUP_HASHRATE_FRACTION, DEFAULT_WARMUP_HASHRATE_FRACTION
+        )
 
         categories_select = SelectSelector(
             SelectSelectorConfig(
@@ -361,6 +389,40 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                 max=20_000,
                 step=10,
                 unit_of_measurement="W",
+                mode=NumberSelectorMode.BOX,
+            )
+        )
+        power_sensor_select = EntitySelector(
+            EntitySelectorConfig(
+                domain=["sensor", "switch", "binary_sensor", "input_boolean"]
+            )
+        )
+        power_switch_select = EntitySelector(
+            EntitySelectorConfig(domain=["switch", "input_boolean"])
+        )
+        boot_grace_select = NumberSelector(
+            NumberSelectorConfig(
+                min=0,
+                max=1800,
+                step=5,
+                unit_of_measurement="s",
+                mode=NumberSelectorMode.BOX,
+            )
+        )
+        shutdown_delay_select = NumberSelector(
+            NumberSelectorConfig(
+                min=0,
+                max=600,
+                step=1,
+                unit_of_measurement="s",
+                mode=NumberSelectorMode.BOX,
+            )
+        )
+        warmup_fraction_select = NumberSelector(
+            NumberSelectorConfig(
+                min=0,
+                max=1,
+                step=0.05,
                 mode=NumberSelectorMode.BOX,
             )
         )
@@ -429,6 +491,31 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_TZ_MODE, default=current_tz_mode
                     ): tz_mode_select,
+                    # ── Lifecycle status sensor + power services ────────────
+                    # EntitySelectors: no hard default, current value via
+                    # suggested_value so an empty submit clears the key.
+                    vol.Optional(
+                        CONF_POWER_SENSOR,
+                        description={"suggested_value": current_power_sensor or None},
+                    ): power_sensor_select,
+                    vol.Optional(
+                        CONF_POWER_SWITCH,
+                        description={"suggested_value": current_power_switch or None},
+                    ): power_switch_select,
+                    vol.Optional(
+                        CONF_BOOT_GRACE, default=current_boot_grace
+                    ): boot_grace_select,
+                    vol.Optional(
+                        CONF_SHUTDOWN_DELAY, default=current_shutdown_delay
+                    ): shutdown_delay_select,
+                    vol.Optional(
+                        CONF_MINING_POWER_THRESHOLD_W,
+                        description={"suggested_value": current_mining_threshold},
+                    ): power_watt_select,
+                    vol.Optional(
+                        CONF_WARMUP_HASHRATE_FRACTION,
+                        default=current_warmup_fraction,
+                    ): warmup_fraction_select,
                     vol.Optional(CONF_PASSWORD, default=current_password): str,
                 }
             ),

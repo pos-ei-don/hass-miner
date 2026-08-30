@@ -66,7 +66,13 @@
           "password": "Firmware-Web-Passwort (BETA, für VNish)",
           "simple_naming": "Einfaches Entity-Naming",
           "timezone_check": "Miner-Zeitzone synchron halten (inkl. Sommer-/Winterzeit)",
-          "timezone_mode": "Umgang mit abweichender Zeitzone"
+          "timezone_mode": "Umgang mit abweichender Zeitzone",
+          "power_sensor": "Leistungssensor (Status-Funktion)",
+          "power_switch": "Steckdose/Schalter (für Power-Services)",
+          "boot_grace_seconds": "Boot-Karenzzeit (Sekunden)",
+          "shutdown_delay_seconds": "Ausschalt-Verzögerung (Sekunden)",
+          "mining_power_threshold_w": "Mining-Leistungsschwelle (W, optional)",
+          "warmup_hashrate_fraction": "Aufwärm-Hashrate-Anteil"
         },
         "data_description": {
           "sensor_categories": "Gewünschte Gruppen ankreuzen. Abgewählte Gruppen werden beim Neuladen entfernt.",
@@ -76,9 +82,43 @@
           "boot_timeout": "Wie lange nach dem Einschalten auf den Miner gewartet wird, bevor der Boot-Timeout-Alarm ausgelöst wird (Default 120 s).",
           "simple_naming": "Erzeugt deterministische entity_ids „miner_<name>_<key>“ aus dem Eintragsnamen für NEUE Entities. Bestehende Entities werden nur über den Knopf „Namensschema anwenden“ migriert.",
           "timezone_check": "Wenn gesetzt, wird die Zeitzone des Miners regelmäßig und beim Start mit der von Home Assistant konfigurierten Zone abgeglichen. VNish-Miner kennen keine Sommer-/Winterzeit, daher wird der korrekte Offset bei jeder Zeitumstellung neu gesetzt.",
-          "timezone_mode": "„auto“ korrigiert eine Abweichung automatisch; „repair“ meldet nur ein behebbares Problem zur Bestätigung."
+          "timezone_mode": "„auto“ korrigiert eine Abweichung automatisch; „repair“ meldet nur ein behebbares Problem zur Bestätigung.",
+          "power_sensor": "Externe Leistungsmessung (Watt-Sensor bevorzugt, alternativ Schalter/binary_sensor), die dem Status-Sensor sagt, ob der Miner Strom zieht — trennt „off“ von einem nicht erreichbaren, aber eingeschalteten Miner. Ohne Angabe wird der Polling-Stromsensor verwendet.",
+          "power_switch": "Die schaltbare Steckdose, die die Services power_on / power_off betätigen.",
+          "boot_grace_seconds": "Nach dem Einschalten: wie lange ein nicht erreichbarer Miner noch „starting“ ist, bevor er „fault“ wird (Default 120 s).",
+          "shutdown_delay_seconds": "In power_off die Verzögerung zwischen Pause und Ausschalten (Default 30 s).",
+          "mining_power_threshold_w": "Optionale externe Watt-Last, ab der der Miner auch ohne Live-Hashrate als „mining“ gilt.",
+          "warmup_hashrate_fraction": "Hashrate/Erwartung-Verhältnis, unterhalb dessen ein hashender Miner „warming_up“ statt „mining“ anzeigt (Default 0.8)."
         }
       }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "miner_status": {
+        "state": {
+          "off": "Aus",
+          "starting": "Startet",
+          "warming_up": "Wärmt auf",
+          "mining": "Mining",
+          "paused": "Pausiert",
+          "stopping": "Fährt herunter",
+          "overheating": "Überhitzt",
+          "fault": "Störung",
+          "updating": "Aktualisiert",
+          "unknown": "Unbekannt"
+        }
+      }
+    }
+  },
+  "services": {
+    "power_on": {
+      "name": "Miner einschalten",
+      "description": "Schaltet die konfigurierte power_switch ein. Der Status läuft danach von selbst über „starting“ nach „mining“, sobald der Miner erreichbar ist und hasht. No-op, wenn die Steckdose bereits an ist."
+    },
+    "power_off": {
+      "name": "Miner ausschalten",
+      "description": "Pausiert zuerst das Mining per Firmware, setzt den Status auf „stopping“, wartet shutdown_delay_seconds und schaltet dann die power_switch aus."
     }
   },
   "selector": {

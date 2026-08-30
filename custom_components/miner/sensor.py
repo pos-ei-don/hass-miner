@@ -23,6 +23,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from pyasic_rs.data import BoardData, HashRateUnit, MinerData
 
@@ -43,9 +44,13 @@ from .const import (
     DEFAULT_POWER_STEP,
     DEFAULT_SENSOR_CATEGORIES,
     DOMAIN,
+    MINER_STATUS_STATES,
+    STATUS_OVERHEAT_MARGIN_C,
+    STATUS_UNKNOWN,
 )
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity, async_remove_stale_entities
+from .status import StatusInputs, compute_status
 
 UNIT_TH_S = "TH/s"
 UNIT_J_TH = "J/TH"
@@ -664,6 +669,131 @@ class MinerSafetyReasonSensor(MinerEntity, SensorEntity):
         return True
 
 
+def _hashrate_th(hr) -> float | None:
+    """TH/s value of a HashRate, or None. Defensive against lib quirks."""
+    if hr is None:
+        return None
+    try:
+        return hr.into_unit(HashRateUnit.TH).value
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _board_failures(data: MinerData) -> tuple[int, bool]:
+    """(failed_board_count, board_failure) heuristic from BoardData.
+
+    A board counts as failed when the lib positively reports it inactive
+    (``active is False``, .pyi line 17) or reports zero working chips
+    (``working_chips == 0``, .pyi line 48). Boards with unknown values are not
+    counted (never invent a failure from missing data).
+    """
+    count = 0
+    for board in data.hashboards:
+        active = getattr(board, "active", None)
+        working = getattr(board, "working_chips", None)
+        if active is False or working == 0:
+            count += 1
+    return count, count > 0
+
+
+class MinerStatusSensor(MinerEntity, SensorEntity):
+    """[status] Lifecycle status (device_class enum), driven by status.py.
+
+    Precedence and provenance live in ``status.py``; this entity only gathers
+    the raw inputs (external power via the coordinator, live MinerData, cached
+    thermal limit) and renders the resulting enum state + modifier attributes.
+    Always ``available`` so it can report ``off``/``fault`` while the miner is
+    unreachable.
+    """
+
+    _attr_name = "Status"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = MINER_STATUS_STATES
+    _attr_translation_key = "miner_status"
+    _attr_icon = "mdi:state-machine"
+
+    def __init__(self, coordinator: MinerCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._device_unique_id}_status"
+        self._apply_naming("sensor")
+        self._attrs: dict = {}
+
+    def _build_inputs(self) -> StatusInputs:
+        c = self.coordinator
+        data = c.data
+        api_fresh = bool(c.last_update_success and data is not None)
+
+        # Throttle: VNish reports it on /summary (100 == unthrottled); other
+        # firmware exposes MinerData.tuning_percent (.pyi line 628), whose exact
+        # semantics vary → surfaced but only VNish drives ``user_throttled``.
+        if c.is_vnish:
+            throttle_percent = c.vnish_throttle
+        else:
+            throttle_percent = getattr(data, "tuning_percent", None) if data else None
+        user_throttled = bool(
+            c.is_vnish and c.vnish_throttle is not None and c.vnish_throttle < 100
+        )
+
+        failed_boards, board_failure = (
+            _board_failures(data) if data is not None else (0, False)
+        )
+
+        # curtailment_source (best-effort str): who is holding the miner back.
+        if c.power_off_sequence_active:
+            curtailment_source = "integration_power_off"
+        elif user_throttled:
+            curtailment_source = "user_throttle"
+        else:
+            curtailment_source = None
+
+        return StatusInputs(
+            power_present=c.power_present_now(),
+            power_watts=c.power_watts_now(),
+            power_on_since=c.status_power_on_since,
+            now=dt_util.utcnow(),
+            api_fresh=api_fresh,
+            shutdown_active=c.power_off_sequence_active,
+            boot_grace=c.boot_grace,
+            firmware_updating=False,  # not derivable from asic-rs (see status.py)
+            is_mining=(bool(data.is_mining) if data is not None else None),
+            hashrate_th=_hashrate_th(getattr(data, "hashrate", None)) if data else None,
+            expected_hashrate_th=(
+                _hashrate_th(getattr(data, "expected_hashrate", None))
+                if data
+                else None
+            ),
+            max_temp=_max_temperature(data) if data is not None else None,
+            danger_limit=c.safety_hot_limit,  # TemperatureConfig.danger
+            overheat_margin=STATUS_OVERHEAT_MARGIN_C,
+            user_throttled=user_throttled,
+            throttle_percent=throttle_percent,
+            warmup_fraction=c.warmup_fraction,
+            mining_power_threshold_w=c.mining_power_threshold_w,
+            failed_board_count=failed_boards,
+            board_failure=board_failure,
+            curtailment_source=curtailment_source,
+        )
+
+    @property
+    def native_value(self) -> str:
+        try:
+            state, attrs = compute_status(self._build_inputs())
+        except Exception:  # noqa: BLE001 - a status sensor must never crash
+            self._attrs = {}
+            return STATUS_UNKNOWN
+        self._attrs = attrs
+        return state
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return self._attrs
+
+    @property
+    def available(self) -> bool:
+        # Always meaningful: off/fault/starting are reported while unreachable.
+        return True
+
+
 # ── Platform setup ──────────────────────────────────────────────────────────
 
 
@@ -755,6 +885,10 @@ async def async_setup_entry(
     extra_keys: set[str] = set()
     add_safety_reason = False
 
+    # The lifecycle status sensor is always created (core feature); keep its
+    # unique-id so stale-cleanup never removes it.
+    extra_keys.add("status")
+
     # Miner-wide aggregates / statistics.
     if CAT_MINER_SUMMARY in categories:
         for d in MINER_SENSORS:
@@ -840,6 +974,8 @@ async def async_setup_entry(
     entities: list[SensorEntity] = [
         MinerSensorEntity(coordinator, desc) for desc in descriptions
     ]
+    # Lifecycle status sensor (device_class enum) — always present.
+    entities.append(MinerStatusSensor(coordinator))
     if add_safety_reason:
         entities.append(MinerSafetyReasonSensor(coordinator))
     if add_power_status:

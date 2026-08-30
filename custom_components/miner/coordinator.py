@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
@@ -17,7 +19,23 @@ from pyasic_rs.data import HashRateUnit, MinerData
 from pyasic_rs.miner import Miner
 
 from . import bos, vnish
-from .const import BOOT_POLL_INTERVAL, DEFAULT_BOOT_TIMEOUT, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import (
+    BOOT_POLL_INTERVAL,
+    CONF_BOOT_GRACE,
+    CONF_MINING_POWER_THRESHOLD_W,
+    CONF_POWER_ENTITY,
+    CONF_POWER_SENSOR,
+    CONF_POWER_SWITCH,
+    CONF_SHUTDOWN_DELAY,
+    CONF_WARMUP_HASHRATE_FRACTION,
+    DEFAULT_BOOT_GRACE,
+    DEFAULT_BOOT_TIMEOUT,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SHUTDOWN_DELAY,
+    DEFAULT_WARMUP_HASHRATE_FRACTION,
+    DOMAIN,
+    STATUS_POWER_EPSILON_W,
+)
 from .efficiency import EfficiencySampler, EfficiencyStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -110,6 +128,18 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         self._power_on_since = None
         self._power_unsub = None
 
+        # ── Lifecycle-status feature ───────────────────────────────────────
+        # Independent of the polling gate above. Tracks the external power
+        # sensor's off→on edge (for the boot_grace window that separates
+        # ``starting`` from ``fault``) and the running ``power_off`` sequence
+        # (so the status sensor reports ``stopping``). Config is read live from
+        # the entry options via the properties below (additive, all optional).
+        self.status_power_on_since = None
+        self._status_power_unsub = None
+        self._power_off_active: bool = False
+        self._power_off_deadline = None
+        self._power_off_task: asyncio.Task | None = None
+
         super().__init__(
             hass,
             _LOGGER,
@@ -172,6 +202,208 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             self.update_interval = timedelta(seconds=self._scan_interval)
             # Push state so entities re-evaluate availability. _async_update_data
             # will now short-circuit (powered off), so entities go unavailable.
+            self.async_update_listeners()
+
+    # ── Lifecycle-status feature: config, power-edge, power services ────────
+
+    def _status_opts(self) -> dict:
+        entry = self.hass.config_entries.async_get_entry(self.entry_id)
+        return dict(entry.options) if entry else {}
+
+    @property
+    def status_power_sensor(self) -> str | None:
+        """External power sensor for the status states. Falls back to the
+        polling-gate ``power_entity`` when no dedicated sensor is configured."""
+        opts = self._status_opts()
+        return opts.get(CONF_POWER_SENSOR) or opts.get(CONF_POWER_ENTITY) or None
+
+    @property
+    def status_power_switch(self) -> str | None:
+        return self._status_opts().get(CONF_POWER_SWITCH) or None
+
+    @property
+    def boot_grace(self) -> int:
+        return int(self._status_opts().get(CONF_BOOT_GRACE, DEFAULT_BOOT_GRACE))
+
+    @property
+    def shutdown_delay(self) -> int:
+        return int(
+            self._status_opts().get(CONF_SHUTDOWN_DELAY, DEFAULT_SHUTDOWN_DELAY)
+        )
+
+    @property
+    def mining_power_threshold_w(self) -> float | None:
+        val = self._status_opts().get(CONF_MINING_POWER_THRESHOLD_W)
+        return float(val) if val is not None else None
+
+    @property
+    def warmup_fraction(self) -> float:
+        return float(
+            self._status_opts().get(
+                CONF_WARMUP_HASHRATE_FRACTION, DEFAULT_WARMUP_HASHRATE_FRACTION
+            )
+        )
+
+    @property
+    def power_off_sequence_active(self) -> bool:
+        return self._power_off_active
+
+    @staticmethod
+    def _present_from_state(state) -> bool | None:
+        """Interpret a power-entity state: True/False present, None if unknown.
+
+        Numeric (a watt reading) ⇒ present when strictly above a small epsilon.
+        Otherwise a switch/binary_sensor ⇒ present when state == "on".
+        """
+        if state is None or state.state in (None, "", "unavailable", "unknown"):
+            return None
+        try:
+            return float(state.state) > STATUS_POWER_EPSILON_W
+        except (TypeError, ValueError):
+            return state.state == "on"
+
+    def power_present_now(self) -> bool | None:
+        sensor = self.status_power_sensor
+        if not sensor:
+            return None
+        return self._present_from_state(self.hass.states.get(sensor))
+
+    def power_watts_now(self) -> float | None:
+        sensor = self.status_power_sensor
+        if not sensor:
+            return None
+        state = self.hass.states.get(sensor)
+        if state is None:
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
+
+    async def async_setup_status_tracking(self) -> None:
+        """Subscribe to the external power sensor's edges (status feature).
+
+        No-op when no power sensor is configured. Seeds ``status_power_on_since``
+        from the current state so the boot_grace window is meaningful right after
+        an HA restart while the miner is already powered.
+        """
+        sensor = self.status_power_sensor
+        if not sensor:
+            return
+        state = self.hass.states.get(sensor)
+        if self._present_from_state(state):
+            # last_changed is the best available proxy for the on-edge time.
+            self.status_power_on_since = (
+                state.last_changed if state else dt_util.utcnow()
+            )
+        self._status_power_unsub = async_track_state_change_event(
+            self.hass, [sensor], self._handle_status_power_event
+        )
+
+    @callback
+    def _handle_status_power_event(self, event) -> None:
+        new = event.data.get("new_state")
+        present = self._present_from_state(new)
+        if present is None:
+            # Transient unknown/unavailable: keep the last edge, don't reset it.
+            return
+        old = event.data.get("old_state")
+        old_present = self._present_from_state(old)
+        if present and not old_present:
+            self.status_power_on_since = (
+                new.last_changed if new else dt_util.utcnow()
+            )
+        elif not present:
+            self.status_power_on_since = None
+        # Let the status sensor re-evaluate immediately on the edge.
+        self.async_update_listeners()
+
+    @callback
+    def _stop_status_tracking(self) -> None:
+        """Unsubscribe + cancel any pending power-off sequence (on unload)."""
+        if self._status_power_unsub is not None:
+            self._status_power_unsub()
+            self._status_power_unsub = None
+        self._cancel_power_off()
+
+    def _cancel_power_off(self) -> None:
+        if self._power_off_task is not None and not self._power_off_task.done():
+            self._power_off_task.cancel()
+        self._power_off_task = None
+        self._power_off_active = False
+        self._power_off_deadline = None
+
+    async def async_power_on(self) -> None:
+        """Service ``miner.power_on``: switch the outlet on (no-op if already on).
+
+        The status sensor then progresses starting → warming_up → mining on its
+        own as the boot edge ages and the API/hashrate come up.
+        """
+        switch = self.status_power_switch
+        if not switch:
+            raise HomeAssistantError(
+                "miner.power_on: no 'power_switch' configured in the options"
+            )
+        # Cancel a pending power-off so on/off can't race.
+        self._cancel_power_off()
+        state = self.hass.states.get(switch)
+        if state is not None and state.state == "on":
+            return  # already on → no-op
+        await self.hass.services.async_call(
+            "homeassistant", "turn_on", {"entity_id": switch}, blocking=True
+        )
+
+    async def async_power_off(self) -> None:
+        """Service ``miner.power_off``: software-pause, then cut power after the
+        shutdown delay.
+
+        Order (design Weg A): pause mining via the library (same path as the
+        Mining switch — ``miner.pause``), set ``stopping``, wait
+        ``shutdown_delay_seconds`` without blocking the event loop, then switch
+        the outlet off. The running sequence is remembered so the status sensor
+        reports ``stopping`` throughout.
+        """
+        switch = self.status_power_switch
+        if not switch:
+            raise HomeAssistantError(
+                "miner.power_off: no 'power_switch' configured in the options"
+            )
+        # 1) Software-pause mining first (best-effort; never blocks the cut-off).
+        if self.miner is not None and self.supports_pause:
+            try:
+                await self.miner.pause(timedelta(0))
+            except Exception as err:  # noqa: BLE001 - proceed to cut power anyway
+                _LOGGER.warning(
+                    "miner.power_off: pause failed for %s, cutting power anyway: %s",
+                    self.ip, err,
+                )
+        # 2) Mark the sequence active → status sensor shows ``stopping``.
+        delay = self.shutdown_delay
+        self._cancel_power_off()
+        self._power_off_active = True
+        self._power_off_deadline = dt_util.utcnow() + timedelta(seconds=delay)
+        self.async_update_listeners()
+        # 3) Delayed switch-off, off the event loop.
+        self._power_off_task = self.hass.async_create_task(
+            self._power_off_finish(switch, delay)
+        )
+
+    async def _power_off_finish(self, switch: str, delay: int) -> None:
+        try:
+            await asyncio.sleep(delay)
+            await self.hass.services.async_call(
+                "homeassistant", "turn_off", {"entity_id": switch}, blocking=True
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error(
+                "miner.power_off: switching %s off failed: %s", switch, err
+            )
+        finally:
+            self._power_off_active = False
+            self._power_off_deadline = None
+            self._power_off_task = None
             self.async_update_listeners()
 
     # ── Cached device profile (offline resilience) ─────────────────────────
