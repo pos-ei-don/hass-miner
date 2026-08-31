@@ -166,10 +166,12 @@ async def async_setup_entry(
         is_vnish = coordinator.is_vnish or bool(
             coordinator.profile and coordinator.profile.get("is_vnish")
         )
-        # Only offer the preset select if the lib actually supports presets.
-        # Guards against a wheel without preset support showing a half-working
-        # select ("unknown" current + fallback options) — the 0.7.0.4 regression.
-        if is_vnish and coordinator.supports_presets:
+        # VNish preset select. The provider picks its control path by capability:
+        # the fork wheel drives it natively (coordinator.supports_presets), the
+        # upstream PyPI pyasic-rs==0.8.0 (no native preset methods) drives it via
+        # the VNish REST shim (vnish.py). Either way a detected VNish miner gets a
+        # fully working select, so it is no longer gated on supports_presets.
+        if is_vnish:
             # Same unique_id as the previous VnishPresetSelect → entity preserved.
             entities.append(
                 PowerLevelSelect(

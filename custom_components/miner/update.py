@@ -105,6 +105,14 @@ async def async_setup_entry(
         coordinator.profile and coordinator.profile.get("is_vnish")
     )
 
+    # Capability-gated (orglib branch): the native local update check
+    # (miner.check_firmware_update) exists only on the fork wheel, so on upstream
+    # PyPI pyasic-rs==0.8.0 supports_check_firmware_update is False. VNish miners
+    # still get the entity because the update-availability check for them is the
+    # vendor-cloud changelog path (_vnish_cloud, see async_update) — that path has
+    # NO library dependency and works on the upstream lib. A non-VNish miner on the
+    # upstream lib therefore shows no firmware-update entity (no native check, no
+    # crash). TODO(orglib): a BOS-local shim could restore the non-VNish check.
     entities: list[MinerEntity] = []
     if coordinator.supports_check_firmware_update or is_vnish:
         entities.append(MinerFirmwareUpdate(coordinator, vnish_cloud=is_vnish))

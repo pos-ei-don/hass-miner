@@ -579,14 +579,19 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         session = async_get_clientsession(self.hass)
         self.is_vnish = await vnish.detect_vnish(session, self.ip)
         if self.is_vnish:
-            # Native (asic-rs 0.7.0.2+): preset list/labels come from the library
-            # (miner.get_presets), authenticated via the set_auth above — no REST
-            # shim. Each PresetInfo carries name/pretty/status for the label.
+            # Two preset sources, picked by library capability (orglib branch):
+            #   * Fork wheel (supports_presets) — native miner.get_presets(), each
+            #     PresetInfo carries name/pretty/status, authenticated via set_auth.
+            #   * Upstream PyPI pyasic-rs==0.8.0 (no native preset methods) — the
+            #     VNish REST shim (vnish.fetch_presets) provides the same data.
             presets: list = []
-            try:
-                presets = await self.miner.get_presets()
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.debug("native get_presets failed for %s: %s", self.ip, err)
+            if self.supports_presets:
+                try:
+                    presets = await self.miner.get_presets()
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "native get_presets failed for %s: %s", self.ip, err
+                    )
             if presets:
                 self.vnish_presets = [p.name for p in presets]
                 self.vnish_preset_labels = {
@@ -594,9 +599,25 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
                     for p in presets
                 }
             else:
-                # No live list (no password / unreachable): bare fallback names.
-                self.vnish_presets = list(vnish.FALLBACK_PRESETS)
-                self.vnish_preset_labels = {n: n for n in vnish.FALLBACK_PRESETS}
+                # No native list (upstream lib, or no live native data): fetch the
+                # live preset list via the REST shim (needs the configured pw).
+                shim_presets = await vnish.fetch_presets(
+                    session, self.ip, self.password
+                )
+                if shim_presets:
+                    self.vnish_presets = [p["name"] for p in shim_presets]
+                    self.vnish_preset_labels = {
+                        p["name"]: vnish.preset_label(
+                            p["name"], p["pretty"], p["status"]
+                        )
+                        for p in shim_presets
+                    }
+                else:
+                    # No live list (no password / unreachable): bare fallback names.
+                    self.vnish_presets = list(vnish.FALLBACK_PRESETS)
+                    self.vnish_preset_labels = {
+                        n: n for n in vnish.FALLBACK_PRESETS
+                    }
             if self.password:
                 (
                     self.vnish_power_limit,
@@ -743,13 +764,22 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             self.vnish_throttle, self.vnish_state = await vnish.fetch_status(
                 session, self.ip
             )
-            # asic-rs 0.7.1: current preset = get_tuning_target().preset_name.
-            # VNish exposes the active autotune preset UNAUTHENTICATED, so this is
-            # NOT gated on a configured password — otherwise the preset select
-            # stays empty/unknown on password-less entries (e.g. hydro1).
-            target = await self.miner.get_tuning_target()
-            self.vnish_preset = (
-                target.preset_name if target is not None else None
-            )
+            if self.supports_presets:
+                # Fork wheel: current preset = get_tuning_target().preset_name.
+                # VNish exposes the active autotune preset UNAUTHENTICATED, so this
+                # is NOT gated on a configured password — otherwise the preset
+                # select stays empty/unknown on password-less entries (e.g. hydro1).
+                target = await self.miner.get_tuning_target()
+                self.vnish_preset = (
+                    target.preset_name if target is not None else None
+                )
+            else:
+                # Upstream lib (no preset_name on TuningTarget): read the current
+                # preset via the REST shim. This reads /settings and therefore
+                # needs the configured password; without one it stays None (the
+                # select then shows options but no current selection).
+                self.vnish_preset = await vnish.fetch_current_preset(
+                    session, self.ip, self.password
+                )
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("VNish extra-poll failed for %s: %s", self.ip, err)

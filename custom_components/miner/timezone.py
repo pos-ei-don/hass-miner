@@ -55,8 +55,12 @@ from .const import (
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity
 
-# Older wheels may not ship TimezoneConfig — import-guard so the module always
-# loads and we degrade to "no entity / no-op sync".
+# Older/upstream wheels may not ship TimezoneConfig — import-guard so the module
+# always loads and we degrade to "no entity / no-op sync". On upstream PyPI
+# pyasic-rs==0.8.0 (orglib branch) this import fails and the whole timezone
+# feature stays dormant (no entity, sync is a no-op) — capability-gated, no crash.
+# TODO(orglib): a VNish REST shim (GET/POST /timezone via vnish.py) could restore
+# timezone read/write on the upstream lib, analogous to the preset shim.
 try:
     from pyasic_rs.config import TimezoneConfig
 except Exception:  # noqa: BLE001

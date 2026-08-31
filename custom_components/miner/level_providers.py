@@ -20,6 +20,7 @@ import math
 import re
 
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from pyasic_rs import TuningConfig
 from pyasic_rs.data import HashRateUnit
@@ -52,7 +53,15 @@ class LevelProvider:
 
 
 class VnishPresetProvider(LevelProvider):
-    """VNish autotune presets, native via asic-rs (miner.get_presets/set_preset)."""
+    """VNish autotune presets.
+
+    Control path chosen by library capability: the fork wheel drives presets
+    natively (``coordinator.supports_presets`` -> ``miner.get_presets`` /
+    ``set_tuning_config(TuningConfig.preset(...))``); upstream PyPI
+    ``pyasic-rs==0.8.0`` has no native preset methods and drives them via the
+    VNish REST shim (``vnish.py``). ``options``/``current_option`` read the
+    cached coordinator state populated by whichever path ran.
+    """
 
     def __init__(self, coordinator) -> None:
         self.c = coordinator
@@ -115,11 +124,23 @@ class VnishPresetProvider(LevelProvider):
 
     async def apply(self, option: str) -> None:
         name = self._name_for(option)
-        # Native: select the preset via the library (auth via set_auth).
-        # asic-rs 0.7.1 (#289/#291): set_preset -> set_tuning_config(preset).
-        ok = await self.c.miner.set_tuning_config(TuningConfig.preset(name))
-        if ok is False:
-            raise HomeAssistantError(f"VNish preset '{name}' failed")
+        if self.c.supports_presets:
+            # Fork wheel: select the preset via the library (auth via set_auth).
+            # asic-rs 0.7.1 (#289/#291): set_preset -> set_tuning_config(preset).
+            ok = await self.c.miner.set_tuning_config(TuningConfig.preset(name))
+            if ok is False:
+                raise HomeAssistantError(f"VNish preset '{name}' failed")
+        else:
+            # Upstream lib (no TuningConfig.preset / set-preset path): apply via
+            # the VNish REST shim (unlock -> POST /settings). Needs the pw.
+            session = async_get_clientsession(self.c.hass)
+            ok, detail = await vnish.apply_preset(
+                session, self.c.ip, self.c.password, name
+            )
+            if not ok:
+                raise HomeAssistantError(
+                    f"VNish preset '{name}' failed: {detail}"
+                )
         self.c.vnish_preset = name
 
 
