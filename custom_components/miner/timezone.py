@@ -113,6 +113,28 @@ def _target_timezone(coordinator: MinerCoordinator) -> str | None:
         return None
 
 
+def _tz_str(value: object) -> str | None:
+    """Zeitzone als String — egal ob die Lib str oder tzinfo liefert.
+
+    asic-rs 0.8.1 hat den Typ geaendert: `TimezoneConfig.timezone` gibt jetzt ein
+    `tzinfo`-Objekt zurueck (Fork-Wheel 0.8.0.1 lieferte noch `str`), und
+    `available` entsprechend `list[tzinfo]`. Upstream hat das beim Merge von #295
+    umgebaut. Ein HA-`select` braucht an `current_option`/`options` aber Strings —
+    ohne diese Normalisierung landet ein tzinfo-Objekt in der Entity und die
+    Auswahl bleibt leer bzw. HA meldet einen ungueltigen Zustand.
+
+    `str(ZoneInfo("Europe/Vienna"))` == "Europe/Vienna", der Schreibpfad
+    (`TimezoneConfig(timezone=...)`) nimmt weiterhin beides an — deshalb genuegt
+    die Normalisierung an den LESE-Stellen.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    key = getattr(value, "key", None)   # zoneinfo.ZoneInfo traegt den IANA-Namen
+    return str(key) if key else str(value)
+
+
 async def _read_timezone(coordinator: MinerCoordinator) -> str | None:
     """Read the miner's current timezone via the library, or None."""
     miner = coordinator.miner
@@ -125,7 +147,7 @@ async def _read_timezone(coordinator: MinerCoordinator) -> str | None:
         return None
     if config is None:
         return None
-    return getattr(config, "timezone", None)
+    return _tz_str(getattr(config, "timezone", None))
 
 
 async def _set_timezone(coordinator: MinerCoordinator, value: str) -> None:
@@ -288,10 +310,12 @@ class MinerTimezoneSelect(MinerEntity, SelectEntity):
             return
         if config is None:
             return
-        self._current = getattr(config, "timezone", None)
+        self._current = _tz_str(getattr(config, "timezone", None))
         available = getattr(config, "available", None)
         if available:
-            self._available = list(available)
+            # 0.8.1 liefert hier list[tzinfo]; None-Eintraege faellt die
+            # options-Property ohnehin weg, str-Normalisierung s. _tz_str.
+            self._available = [z for z in (_tz_str(a) for a in available) if z]
 
     async def async_select_option(self, option: str) -> None:
         await _set_timezone(self.coordinator, option)
