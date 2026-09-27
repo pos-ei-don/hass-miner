@@ -2,6 +2,7 @@
 
 target-version = "py310"
 
+[lint]
 select = [
     "B007",    # Loop control variable {name} not used within loop body
     "B014",    # Exception handler with duplicate exception
@@ -42,3 +43,8 @@ ignore = [
     "E731", # do not assign a lambda expression, use a def
     "C901", # do not check complexity
 ]
+
+[lint.per-file-ignores]
+# The offline test module doubles as a standalone runner (python3 tests/test_status.py)
+# that reports results via print — intended output, not debug leftovers.
+"tests/**" = ["T201"]

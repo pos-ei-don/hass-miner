@@ -219,8 +219,11 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
 
     @property
     def status_power_sensor(self) -> str | None:
-        """External power sensor for the status states. Falls back to the
-        polling-gate ``power_entity`` when no dedicated sensor is configured."""
+        """External power sensor for the status states.
+
+        Falls back to the polling-gate ``power_entity`` when no dedicated sensor
+        is configured.
+        """
         opts = self._status_opts()
         return opts.get(CONF_POWER_SENSOR) or opts.get(CONF_POWER_ENTITY) or None
 
@@ -409,8 +412,9 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         )
 
     async def async_power_off(self) -> None:
-        """Service ``miner.power_off``: software-pause, then cut power after the
-        shutdown delay.
+        """Service ``miner.power_off``: software-pause, then cut power after the delay.
+
+        The delay is ``shutdown_delay_seconds``.
 
         Order (design Weg A): pause mining via the library (same path as the
         Mining switch — ``miner.pause``), set ``stopping``, wait

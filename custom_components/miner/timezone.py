@@ -26,11 +26,11 @@ sync — the integration never crashes.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import voluptuous as vol
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -171,10 +171,8 @@ def _entry_title(coordinator: MinerCoordinator) -> str:
 
 
 def _delete_issue(hass: HomeAssistant, coordinator: MinerCoordinator) -> None:
-    try:
+    with contextlib.suppress(Exception):
         ir.async_delete_issue(hass, DOMAIN, _issue_id(coordinator))
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _create_issue(
@@ -184,7 +182,7 @@ def _create_issue(
     current: str | None,
     target: str,
 ) -> None:
-    try:
+    with contextlib.suppress(Exception):
         ir.async_create_issue(
             hass,
             DOMAIN,
@@ -198,8 +196,6 @@ def _create_issue(
                 "name": _entry_title(coordinator),
             },
         )
-    except Exception:  # noqa: BLE001
-        pass
 
 
 async def async_sync_timezone(

@@ -124,10 +124,13 @@ class MinerEntity(CoordinatorEntity[MinerCoordinator]):
         return self.coordinator.ip
 
     def _apply_naming(self, platform_domain: str) -> None:
-        """Suggest a deterministic entity_id (#625), called by each platform
-        after unique_id is set. Only honored at FIRST registration — existing
-        entities keep their entity_id (use the "Apply naming scheme" button to
-        migrate). No-op when simple_naming is off or unique_id is unset."""
+        """Suggest a deterministic entity_id (#625).
+
+        Called by each platform after unique_id is set. Only honored at FIRST
+        registration — existing entities keep their entity_id (use the "Apply
+        naming scheme" button to migrate). No-op when simple_naming is off or
+        unique_id is unset.
+        """
         if not self._simple_naming or not self._attr_unique_id:
             return
         object_id = naming_object_id(

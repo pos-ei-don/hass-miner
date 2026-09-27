@@ -32,7 +32,7 @@ def _url(ip: str) -> str:
 
 
 async def detect_bos(session: aiohttp.ClientSession, ip: str) -> bool:
-    """True if the miner at ip answers the BOS GraphQL API."""
+    """Return True if the miner at ip answers the BOS GraphQL API."""
     try:
         async with session.post(
             _url(ip), json={"query": _INFO_QUERY}, timeout=_TIMEOUT

@@ -115,8 +115,10 @@ def _under_warmup(i: StatusInputs) -> bool:
 
 
 def _overheating(i: StatusInputs) -> bool:
-    """Temp within ``overheat_margin`` of danger AND hashrate under expected,
-    with no deliberate user throttle explaining the shortfall."""
+    """Temp within ``overheat_margin`` of danger AND hashrate under expected.
+
+    Only when no deliberate user throttle explains the shortfall.
+    """
     if i.danger_limit is None or i.max_temp is None:
         return False
     if i.user_throttled:

@@ -40,7 +40,8 @@ class ApplyNamingButton(MinerEntity, ButtonEntity):
     registered entities keep their id. Pressing this renames them to
     "<platform>.miner_<slug>_<key>" deterministically. Existing references
     (automations/dashboards) may need updating afterwards — hence a manual,
-    config-category action, never automatic."""
+    config-category action, never automatic.
+    """
 
     _attr_name = "Apply naming scheme"
     _attr_icon = "mdi:rename-box"

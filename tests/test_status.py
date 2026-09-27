@@ -43,30 +43,30 @@ compute_status = status.compute_status
 NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _mk(**kw) -> "StatusInputs":
-    base = dict(
-        power_present=True,
-        power_watts=3000.0,
-        power_on_since=NOW - timedelta(seconds=300),
-        now=NOW,
-        api_fresh=True,
-        shutdown_active=False,
-        boot_grace=120,
-        firmware_updating=False,
-        is_mining=True,
-        hashrate_th=100.0,
-        expected_hashrate_th=100.0,
-        max_temp=60.0,
-        danger_limit=90.0,
-        overheat_margin=3.0,
-        user_throttled=False,
-        throttle_percent=100,
-        warmup_fraction=0.8,
-        mining_power_threshold_w=None,
-        failed_board_count=0,
-        board_failure=False,
-        curtailment_source=None,
-    )
+def _mk(**kw) -> StatusInputs:
+    base = {
+        "power_present": True,
+        "power_watts": 3000.0,
+        "power_on_since": NOW - timedelta(seconds=300),
+        "now": NOW,
+        "api_fresh": True,
+        "shutdown_active": False,
+        "boot_grace": 120,
+        "firmware_updating": False,
+        "is_mining": True,
+        "hashrate_th": 100.0,
+        "expected_hashrate_th": 100.0,
+        "max_temp": 60.0,
+        "danger_limit": 90.0,
+        "overheat_margin": 3.0,
+        "user_throttled": False,
+        "throttle_percent": 100,
+        "warmup_fraction": 0.8,
+        "mining_power_threshold_w": None,
+        "failed_board_count": 0,
+        "board_failure": False,
+        "curtailment_source": None,
+    }
     base.update(kw)
     return StatusInputs(**base)
 
@@ -194,9 +194,6 @@ def test_modifier_attributes():
 
 def test_every_state_is_a_valid_enum_option():
     # Whatever the machine emits must be in the sensor's enum options.
-    for name, fn in list(globals().items()):
-        if name.startswith("test_") and name != "test_every_state_is_a_valid_enum_option":
-            pass
     # Spot-check a spread of inputs.
     for inp in (
         _mk(power_present=False),

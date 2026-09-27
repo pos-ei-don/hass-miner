@@ -199,7 +199,8 @@ class SteppedPowerProvider(LevelProvider):
         ≈ rated default (so the list reaches the nominal point, not just what's
         been run so far). STABLE: expected_hashrate is a constant model value, so
         no jitter (unlike the live efficiency). The owner can configure ANY higher
-        value — that's their business; no clamp is applied to a configured max."""
+        value — that's their business; no clamp is applied to a configured max.
+        """
         try:
             th = _as_th(getattr(self.c.data, "expected_hashrate", None))
             if th and th > 0:
