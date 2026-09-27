@@ -209,6 +209,57 @@ def test_every_state_is_a_valid_enum_option():
         assert compute_status(inp)[0] in const.MINER_STATUS_STATES
 
 
+
+# ── Overlays: winter_mode / out_of_service (alpha52) ────────────────────────
+# Only over "not running" (off/unknown); a powered or hashing miner — e.g.
+# switched on by hand — always shows its real state. Winter wins.
+
+
+def test_winter_mode_over_off():
+    assert _state(power_present=False, winter_mode=True) == "winter_mode"
+
+
+def test_winter_mode_over_unknown():
+    assert (
+        _state(power_present=None, api_fresh=False, power_on_since=None, winter_mode=True)
+        == "winter_mode"
+    )
+
+
+def test_out_of_service_over_off():
+    assert _state(power_present=False, out_of_service=True) == "out_of_service"
+
+
+def test_winter_mode_wins_over_out_of_service():
+    assert (
+        _state(power_present=False, winter_mode=True, out_of_service=True)
+        == "winter_mode"
+    )
+
+
+def test_overlays_never_hide_a_running_miner():
+    for kw in (
+        {},  # mining
+        {"hashrate_th": 10.0},  # warming_up
+        {"api_fresh": False, "power_on_since": NOW - timedelta(seconds=30)},  # starting
+        {"api_fresh": False, "power_on_since": None},  # fault (powered, unreachable)
+        {"shutdown_active": True},  # stopping
+        {"is_mining": False},  # paused (powered)
+    ):
+        ohne = _state(**kw)
+        assert _state(**kw, winter_mode=True, out_of_service=True) == ohne, kw
+
+
+def test_overlay_attributes():
+    _, attrs = compute_status(_mk(power_present=False, winter_mode=True))
+    assert attrs["winter_mode"] is True and attrs["out_of_service"] is False
+
+
+def test_overlay_states_are_valid_enum_options():
+    for st in ("winter_mode", "out_of_service"):
+        assert st in const.MINER_STATUS_STATES
+
+
 if __name__ == "__main__":
     passed = 0
     failed = 0

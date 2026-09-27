@@ -23,6 +23,7 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
 )
 
 from pyasic_rs import MinerFactory
@@ -33,6 +34,8 @@ from .const import (
     CONF_ENABLE_POWER_LEVELS,
     CONF_MINING_POWER_THRESHOLD_W,
     CONF_ONLY_AVAILABLE,
+    CONF_OUT_OF_SERVICE_ENTITY,
+    CONF_OUT_OF_SERVICE_STATE,
     CONF_POWER_ENTITY,
     CONF_POWER_MAX,
     CONF_POWER_MIN,
@@ -46,18 +49,22 @@ from .const import (
     CONF_TZ_CHECK,
     CONF_TZ_MODE,
     CONF_WARMUP_HASHRATE_FRACTION,
+    CONF_WINTER_MODE_ENTITY,
+    CONF_WINTER_MODE_STATE,
     DEFAULT_BOOT_GRACE,
     DEFAULT_BOOT_TIMEOUT,
     DEFAULT_ENABLE_POWER_LEVELS,
     DEFAULT_SHUTDOWN_DELAY,
     DEFAULT_SIMPLE_NAMING,
     DEFAULT_ONLY_AVAILABLE,
+    DEFAULT_OUT_OF_SERVICE_STATE,
     DEFAULT_POWER_STEP,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SENSOR_CATEGORIES,
     DEFAULT_TZ_CHECK,
     DEFAULT_TZ_MODE,
     DEFAULT_WARMUP_HASHRATE_FRACTION,
+    DEFAULT_WINTER_MODE_STATE,
     DOMAIN,
     TZ_MODE_AUTO,
     TZ_MODE_REPAIR,
@@ -302,6 +309,9 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                 data.pop(CONF_POWER_SWITCH, None)
             if user_input.get(CONF_MINING_POWER_THRESHOLD_W) in (None, ""):
                 data.pop(CONF_MINING_POWER_THRESHOLD_W, None)
+            for key in (CONF_WINTER_MODE_ENTITY, CONF_OUT_OF_SERVICE_ENTITY):
+                if not user_input.get(key):
+                    data.pop(key, None)
             return self.async_create_entry(title="", data=data)
 
         options = self.config_entry.options
@@ -338,6 +348,14 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
         current_mining_threshold = options.get(CONF_MINING_POWER_THRESHOLD_W)
         current_warmup_fraction = options.get(
             CONF_WARMUP_HASHRATE_FRACTION, DEFAULT_WARMUP_HASHRATE_FRACTION
+        )
+        current_winter_entity = options.get(CONF_WINTER_MODE_ENTITY, "")
+        current_winter_state = options.get(
+            CONF_WINTER_MODE_STATE, DEFAULT_WINTER_MODE_STATE
+        )
+        current_oos_entity = options.get(CONF_OUT_OF_SERVICE_ENTITY, "")
+        current_oos_state = options.get(
+            CONF_OUT_OF_SERVICE_STATE, DEFAULT_OUT_OF_SERVICE_STATE
         )
 
         categories_select = SelectSelector(
@@ -399,6 +417,17 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
         )
         power_switch_select = EntitySelector(
             EntitySelectorConfig(domain=["switch", "input_boolean"])
+        )
+        status_flag_select = EntitySelector(
+            EntitySelectorConfig(
+                domain=[
+                    "input_boolean",
+                    "binary_sensor",
+                    "switch",
+                    "input_select",
+                    "sensor",
+                ]
+            )
         )
         boot_grace_select = NumberSelector(
             NumberSelectorConfig(
@@ -516,6 +545,20 @@ class AsicMinerOptionsFlow(config_entries.OptionsFlow):
                         CONF_WARMUP_HASHRATE_FRACTION,
                         default=current_warmup_fraction,
                     ): warmup_fraction_select,
+                    vol.Optional(
+                        CONF_WINTER_MODE_ENTITY,
+                        description={"suggested_value": current_winter_entity or None},
+                    ): status_flag_select,
+                    vol.Optional(
+                        CONF_WINTER_MODE_STATE, default=current_winter_state
+                    ): TextSelector(),
+                    vol.Optional(
+                        CONF_OUT_OF_SERVICE_ENTITY,
+                        description={"suggested_value": current_oos_entity or None},
+                    ): status_flag_select,
+                    vol.Optional(
+                        CONF_OUT_OF_SERVICE_STATE, default=current_oos_state
+                    ): TextSelector(),
                     vol.Optional(CONF_PASSWORD, default=current_password): str,
                 }
             ),

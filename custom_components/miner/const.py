@@ -108,6 +108,17 @@ DEFAULT_SHUTDOWN_DELAY = 30  # seconds; pause→power-off delay
 CONF_MINING_POWER_THRESHOLD_W = "mining_power_threshold_w"  # optional
 CONF_WARMUP_HASHRATE_FRACTION = "warmup_hashrate_fraction"
 DEFAULT_WARMUP_HASHRATE_FRACTION = 0.8
+# Optional status overlays (alpha52): while the miner is not running (base state
+# ``off``/``unknown``), the status reads ``winter_mode`` / ``out_of_service`` if
+# the configured entity is in the configured state. Winter wins over
+# out-of-service. The state value is configurable because helpers differ, e.g.
+# a "summer/winter" input_boolean where ``off`` means winter.
+CONF_WINTER_MODE_ENTITY = "winter_mode_entity"
+CONF_WINTER_MODE_STATE = "winter_mode_state"
+DEFAULT_WINTER_MODE_STATE = "on"
+CONF_OUT_OF_SERVICE_ENTITY = "out_of_service_entity"
+CONF_OUT_OF_SERVICE_STATE = "out_of_service_state"
+DEFAULT_OUT_OF_SERVICE_STATE = "on"
 
 # Status-sensor tuning constants (not user-facing).
 # A W reading strictly above this counts as "power present" (a bare standby /
@@ -129,6 +140,10 @@ STATUS_OVERHEATING = "overheating"
 STATUS_FAULT = "fault"
 STATUS_UPDATING = "updating"
 STATUS_UNKNOWN = "unknown"
+# Overlays, applied AFTER the precedence above and only over ``off``/``unknown``
+# (a powered or hashing miner always shows its real state).
+STATUS_WINTER_MODE = "winter_mode"
+STATUS_OUT_OF_SERVICE = "out_of_service"
 
 MINER_STATUS_STATES = [
     STATUS_OFF,
@@ -141,6 +156,8 @@ MINER_STATUS_STATES = [
     STATUS_FAULT,
     STATUS_UPDATING,
     STATUS_UNKNOWN,
+    STATUS_WINTER_MODE,
+    STATUS_OUT_OF_SERVICE,
 ]
 
 # Service names (domain services, registered in __init__.py).

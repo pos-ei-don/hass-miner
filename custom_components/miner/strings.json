@@ -72,7 +72,11 @@
           "boot_grace_seconds": "Boot grace (seconds)",
           "shutdown_delay_seconds": "Shutdown delay (seconds)",
           "mining_power_threshold_w": "Mining power threshold (W, optional)",
-          "warmup_hashrate_fraction": "Warm-up hashrate fraction"
+          "warmup_hashrate_fraction": "Warm-up hashrate fraction",
+          "winter_mode_entity": "Winter-mode entity (status, optional)",
+          "winter_mode_state": "Winter-mode state",
+          "out_of_service_entity": "Out-of-service entity (status, optional)",
+          "out_of_service_state": "Out-of-service state"
         },
         "data_description": {
           "sensor_categories": "Tick the groups to create. Unticked groups are removed on reload.",
@@ -88,7 +92,11 @@
           "boot_grace_seconds": "After power-on, how long an unreachable miner is still “starting” before it becomes “fault” (default 120 s).",
           "shutdown_delay_seconds": "In power_off, the pause→power-off delay (default 30 s).",
           "mining_power_threshold_w": "Optional external watt level at/above which the miner counts as “mining” even without live hashrate.",
-          "warmup_hashrate_fraction": "Hashrate/expected ratio below which a hashing miner reads “warming_up” instead of “mining” (default 0.8)."
+          "warmup_hashrate_fraction": "Hashrate/expected ratio below which a hashing miner reads “warming_up” instead of “mining” (default 0.8).",
+          "winter_mode_entity": "While the miner is not running, the status reads “Winter mode” when this entity is in the state below (e.g. a summer/winter helper).",
+          "winter_mode_state": "State of the entity above that means winter (default “on”; for a summer/winter switch usually “off”).",
+          "out_of_service_entity": "While the miner is not running, the status reads “Out of service” when this entity is in the state below (e.g. a maintenance lock). Winter mode takes precedence.",
+          "out_of_service_state": "State of the entity above that means out of service (default “on”)."
         }
       }
     }
@@ -106,7 +114,9 @@
           "overheating": "Overheating",
           "fault": "Fault",
           "updating": "Updating",
-          "unknown": "Unknown"
+          "unknown": "Unknown",
+          "winter_mode": "Winter mode",
+          "out_of_service": "Out of service"
         }
       }
     }

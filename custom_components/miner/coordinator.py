@@ -23,16 +23,22 @@ from .const import (
     BOOT_POLL_INTERVAL,
     CONF_BOOT_GRACE,
     CONF_MINING_POWER_THRESHOLD_W,
+    CONF_OUT_OF_SERVICE_ENTITY,
+    CONF_OUT_OF_SERVICE_STATE,
     CONF_POWER_ENTITY,
     CONF_POWER_SENSOR,
     CONF_POWER_SWITCH,
     CONF_SHUTDOWN_DELAY,
     CONF_WARMUP_HASHRATE_FRACTION,
+    CONF_WINTER_MODE_ENTITY,
+    CONF_WINTER_MODE_STATE,
     DEFAULT_BOOT_GRACE,
     DEFAULT_BOOT_TIMEOUT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SHUTDOWN_DELAY,
+    DEFAULT_OUT_OF_SERVICE_STATE,
     DEFAULT_WARMUP_HASHRATE_FRACTION,
+    DEFAULT_WINTER_MODE_STATE,
     DOMAIN,
     STATUS_POWER_EPSILON_W,
 )
@@ -136,6 +142,7 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         # the entry options via the properties below (additive, all optional).
         self.status_power_on_since = None
         self._status_power_unsub = None
+        self._status_flag_unsub = None  # winter_mode / out_of_service helpers
         self._power_off_active: bool = False
         self._power_off_deadline = None
         self._power_off_task: asyncio.Task | None = None
@@ -244,6 +251,33 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
             )
         )
 
+    def _flag_active(self, entity_key: str, state_key: str, default: str) -> bool:
+        """Return True when the configured helper entity is in the configured state.
+
+        Unset, missing, unavailable or unknown ⇒ False (the overlay never hides
+        the real status on doubtful input).
+        """
+        opts = self._status_opts()
+        entity = opts.get(entity_key)
+        if not entity:
+            return False
+        state = self.hass.states.get(entity)
+        if state is None or state.state in (None, "", "unavailable", "unknown"):
+            return False
+        return state.state == str(opts.get(state_key) or default)
+
+    def winter_mode_active(self) -> bool:
+        return self._flag_active(
+            CONF_WINTER_MODE_ENTITY, CONF_WINTER_MODE_STATE, DEFAULT_WINTER_MODE_STATE
+        )
+
+    def out_of_service_active(self) -> bool:
+        return self._flag_active(
+            CONF_OUT_OF_SERVICE_ENTITY,
+            CONF_OUT_OF_SERVICE_STATE,
+            DEFAULT_OUT_OF_SERVICE_STATE,
+        )
+
     @property
     def power_off_sequence_active(self) -> bool:
         return self._power_off_active
@@ -287,6 +321,19 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         from the current state so the boot_grace window is meaningful right after
         an HA restart while the miner is already powered.
         """
+        opts = self._status_opts()
+        flags = [
+            e
+            for e in (
+                opts.get(CONF_WINTER_MODE_ENTITY),
+                opts.get(CONF_OUT_OF_SERVICE_ENTITY),
+            )
+            if e
+        ]
+        if flags:
+            self._status_flag_unsub = async_track_state_change_event(
+                self.hass, flags, self._handle_status_flag_event
+            )
         sensor = self.status_power_sensor
         if not sensor:
             return
@@ -319,11 +366,19 @@ class MinerCoordinator(DataUpdateCoordinator[MinerData]):
         self.async_update_listeners()
 
     @callback
+    def _handle_status_flag_event(self, event) -> None:
+        # A winter-mode / out-of-service helper changed: re-evaluate the status.
+        self.async_update_listeners()
+
+    @callback
     def _stop_status_tracking(self) -> None:
         """Unsubscribe + cancel any pending power-off sequence (on unload)."""
         if self._status_power_unsub is not None:
             self._status_power_unsub()
             self._status_power_unsub = None
+        if self._status_flag_unsub is not None:
+            self._status_flag_unsub()
+            self._status_flag_unsub = None
         self._cancel_power_off()
 
     def _cancel_power_off(self) -> None:

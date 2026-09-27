@@ -772,6 +772,8 @@ class MinerStatusSensor(MinerEntity, SensorEntity):
             failed_board_count=failed_boards,
             board_failure=board_failure,
             curtailment_source=curtailment_source,
+            winter_mode=c.winter_mode_active(),
+            out_of_service=c.out_of_service_active(),
         )
 
     @property

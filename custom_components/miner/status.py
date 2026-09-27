@@ -20,6 +20,11 @@ Provenance of the derivations (asic-rs 0.8.0.1, ``pyasic_rs/asic_rs.pyi``):
   * throttle (other fw)     -> MinerData.tuning_percent       (.pyi line 628)
   * board active / chips    -> BoardData.active/working_chips (.pyi lines 17/48)
 
+Overlays (alpha52), applied after the precedence and only over ``off``/``unknown``:
+  * ``winter_mode``    -> option winter_mode_entity is in winter_mode_state
+  * ``out_of_service`` -> option out_of_service_entity is in out_of_service_state
+  Winter wins over out-of-service. Both come from HA helpers, not from the miner.
+
 Not provable from the API, therefore intentionally NOT auto-derived:
   * ``updating`` — asic-rs exposes ``check_firmware_update`` (whether an update
     is AVAILABLE) but no "an upgrade is in progress" flag. The state stays a
@@ -35,6 +40,7 @@ from .const import (
     STATUS_FAULT,
     STATUS_MINING,
     STATUS_OFF,
+    STATUS_OUT_OF_SERVICE,
     STATUS_OVERHEATING,
     STATUS_PAUSED,
     STATUS_STARTING,
@@ -42,6 +48,7 @@ from .const import (
     STATUS_UNKNOWN,
     STATUS_UPDATING,
     STATUS_WARMING_UP,
+    STATUS_WINTER_MODE,
 )
 
 
@@ -79,6 +86,11 @@ class StatusInputs:
     failed_board_count: int
     board_failure: bool
     curtailment_source: str | None
+
+    # Overlays (alpha52): configured helper entities say the miner is parked for
+    # the winter / out of service. Only shown while it is not running.
+    winter_mode: bool = False
+    out_of_service: bool = False
 
 
 def _under_expected(i: StatusInputs) -> bool:
@@ -182,6 +194,8 @@ def compute_status(i: StatusInputs) -> tuple[str, dict]:
     and ``curtailment_source``.
     """
     attrs = {
+        "winter_mode": i.winter_mode,
+        "out_of_service": i.out_of_service,
         "throttled": bool(
             i.throttle_percent is not None and i.throttle_percent < 100
         ),
@@ -190,4 +204,12 @@ def compute_status(i: StatusInputs) -> tuple[str, dict]:
         "failed_board_count": i.failed_board_count,
         "curtailment_source": i.curtailment_source,
     }
-    return _state(i), attrs
+    state = _state(i)
+    # Overlays only replace "not running" states; a powered, starting or hashing
+    # miner (e.g. switched on by hand) always shows its real state.
+    if state in (STATUS_OFF, STATUS_UNKNOWN):
+        if i.winter_mode:
+            state = STATUS_WINTER_MODE
+        elif i.out_of_service:
+            state = STATUS_OUT_OF_SERVICE
+    return state, attrs

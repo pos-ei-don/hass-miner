@@ -72,7 +72,11 @@
           "boot_grace_seconds": "Boot-Karenzzeit (Sekunden)",
           "shutdown_delay_seconds": "Ausschalt-Verzögerung (Sekunden)",
           "mining_power_threshold_w": "Mining-Leistungsschwelle (W, optional)",
-          "warmup_hashrate_fraction": "Aufwärm-Hashrate-Anteil"
+          "warmup_hashrate_fraction": "Aufwärm-Hashrate-Anteil",
+          "winter_mode_entity": "Wintermodus-Entity (Status, optional)",
+          "winter_mode_state": "Zustand für Wintermodus",
+          "out_of_service_entity": "Außer-Betrieb-Entity (Status, optional)",
+          "out_of_service_state": "Zustand für Außer Betrieb"
         },
         "data_description": {
           "sensor_categories": "Gewünschte Gruppen ankreuzen. Abgewählte Gruppen werden beim Neuladen entfernt.",
@@ -88,7 +92,11 @@
           "boot_grace_seconds": "Nach dem Einschalten: wie lange ein nicht erreichbarer Miner noch „starting“ ist, bevor er „fault“ wird (Default 120 s).",
           "shutdown_delay_seconds": "In power_off die Verzögerung zwischen Pause und Ausschalten (Default 30 s).",
           "mining_power_threshold_w": "Optionale externe Watt-Last, ab der der Miner auch ohne Live-Hashrate als „mining“ gilt.",
-          "warmup_hashrate_fraction": "Hashrate/Erwartung-Verhältnis, unterhalb dessen ein hashender Miner „warming_up“ statt „mining“ anzeigt (Default 0.8)."
+          "warmup_hashrate_fraction": "Hashrate/Erwartung-Verhältnis, unterhalb dessen ein hashender Miner „warming_up“ statt „mining“ anzeigt (Default 0.8).",
+          "winter_mode_entity": "Solange der Miner nicht läuft, zeigt der Status „Wintermodus“, wenn diese Entity im unten genannten Zustand ist (z. B. ein Sommer/Winter-Schalter).",
+          "winter_mode_state": "Zustand der Entity oben, der Winter bedeutet (Default „on“; bei einem Sommer/Winter-Schalter meist „off“).",
+          "out_of_service_entity": "Solange der Miner nicht läuft, zeigt der Status „Außer Betrieb“, wenn diese Entity im unten genannten Zustand ist (z. B. eine Wartungssperre). Wintermodus hat Vorrang.",
+          "out_of_service_state": "Zustand der Entity oben, der „außer Betrieb“ bedeutet (Default „on“)."
         }
       }
     }
@@ -106,7 +114,9 @@
           "overheating": "Überhitzt",
           "fault": "Störung",
           "updating": "Aktualisiert",
-          "unknown": "Unbekannt"
+          "unknown": "Unbekannt",
+          "winter_mode": "Wintermodus",
+          "out_of_service": "Außer Betrieb"
         }
       }
     }
