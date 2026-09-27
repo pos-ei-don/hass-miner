@@ -38,6 +38,7 @@ Schwester-Fork `pos-ei-don/asic-rs` (eigene FORK.md dort).
 | Power-aware Polling (kein Poll bei ausgeschaltetem Switch) | #612 | `upstream-candidate` |
 | 4-Feld-Temp-Modell (chip/coolant getrennt) | alpha18 | hängt an Lib-PRs #285/#286 |
 | **Kein Mining-Restart nach Preset-Wechsel** (PR #2) | alpha22 | `upstream-candidate` (ai_mainprojekt#620) |
+| Status-Overlays `winter_mode` / `out_of_service` (Helper-Entity + Zustand, nur über off/unknown) | alpha52 | `upstream-candidate` |
 
 ## Integrations-Policy — zwei Achsen
 - **Unsere Changes → Upstream:** Labels `upstream-candidate` / `upstream-submitted` /
