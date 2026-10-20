@@ -20,18 +20,32 @@ class _HAError(Exception):
 
 
 def _load():
+    """Load control.py against the stub; restore sys.modules afterwards."""
+    names = ("homeassistant", "homeassistant.exceptions")
+    saved = {n: sys.modules.get(n) for n in names}
     ha = types.ModuleType("homeassistant")
     exc = types.ModuleType("homeassistant.exceptions")
     exc.HomeAssistantError = _HAError
-    sys.modules.setdefault("homeassistant", ha)
+    ha.exceptions = exc
+    sys.modules["homeassistant"] = ha
     sys.modules["homeassistant.exceptions"] = exc
-    path = (
-        pathlib.Path(__file__).parents[1] / "custom_components" / "miner" / "control.py"
-    )
-    spec = importlib.util.spec_from_file_location("miner_control", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    try:
+        path = (
+            pathlib.Path(__file__).parents[1]
+            / "custom_components"
+            / "miner"
+            / "control.py"
+        )
+        spec = importlib.util.spec_from_file_location("miner_control", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    finally:
+        for n, m in saved.items():
+            if m is None:
+                sys.modules.pop(n, None)
+            else:
+                sys.modules[n] = m
 
 
 control = _load()
@@ -66,8 +80,22 @@ def test_none_result_passes():
 
 def test_refusal_reason_from_library_is_kept():
     reason = 'HTTP error: 400 {"err":"miner is not running"}'
-    with pytest.raises(_HAError, match="Pause mining: .*miner is not running"):
-        _run("Pause mining", _Miner(error=RuntimeError(reason)))
+    err = RuntimeError(reason)
+    with pytest.raises(_HAError, match="Pause mining: .*miner is not running") as ei:
+        _run("Pause mining", _Miner(error=err))
+    assert ei.value.__cause__ is err
+
+
+def test_home_assistant_error_passes_unchanged():
+    err = _HAError("already translated")
+    with pytest.raises(_HAError) as ei:
+        _run("Pause mining", _Miner(error=err))
+    assert ei.value is err
+
+
+def test_stub_does_not_leak_into_sys_modules():
+    stub = sys.modules.get("homeassistant.exceptions")
+    assert stub is None or getattr(stub, "HomeAssistantError", None) is not _HAError
 
 
 def test_false_result_becomes_error():
