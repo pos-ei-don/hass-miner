@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .control import async_miner_control
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class FaultLightSwitch(MinerEntity, SwitchEntity):
@@ -73,15 +77,40 @@ class MiningSwitch(MinerEntity, SwitchEntity):
         return self.coordinator.data.is_mining
 
     async def async_turn_on(self, **kwargs) -> None:
-        await async_miner_control(
-            "Resume mining", self.coordinator.miner, lambda m: m.resume(timedelta(0))
+        await self._switch_mining(
+            "Resume mining", True, lambda m: m.resume(timedelta(0))
         )
-        await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
-        await async_miner_control(
-            "Pause mining", self.coordinator.miner, lambda m: m.pause(timedelta(0))
+        await self._switch_mining(
+            "Pause mining", False, lambda m: m.pause(timedelta(0))
         )
+
+    async def _switch_mining(self, what: str, want: bool, call) -> None:
+        """Pause/resume; a refusal is only an error if the miner is not there yet.
+
+        Since asic-rs 0.8.6 a refused call raises. Braiins OS refuses a pause on
+        a miner that is not mining yet (HTTP 500 right after boot) - that is the
+        wanted state, so it must not abort the caller (automation, script).
+        """
+        try:
+            await async_miner_control(what, self.coordinator.miner, call)
+        except HomeAssistantError as err:
+            await self.coordinator.async_refresh()
+            data = self.coordinator.data
+            if (
+                not self.coordinator.last_update_success
+                or data is None
+                or data.is_mining is not want
+            ):
+                raise
+            _LOGGER.warning(
+                "%s on %s refused, miner already in that state: %s",
+                what,
+                self.coordinator.ip,
+                err,
+            )
+            return
         await self.coordinator.async_request_refresh()
 
 

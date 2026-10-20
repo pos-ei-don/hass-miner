@@ -137,6 +137,7 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
         # only when the lib can't do it locally.
         self._vnish_cloud = vnish_cloud and not coordinator.supports_check_firmware_update
         self._latest_version: str | None = None
+        self._checked: tuple[str | None, str | None] = (None, None)
         self._release_url: str | None = (
             _VNISH_RELEASE_NOTES_URL if self._vnish_cloud else None
         )
@@ -148,15 +149,28 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
         # CoordinatorEntity is otherwise push-only).
         return True
 
-    @property
-    def installed_version(self) -> str | None:
+    def _raw_installed(self) -> str | None:
         data = self.coordinator.data
         return getattr(data, "firmware_version", None) if data else None
+
+    @property
+    def installed_version(self) -> str | None:
+        # Prefer the lib-normalised version from the last check, as long as the
+        # raw firmware string has not changed since (else it is stale).
+        raw = self._raw_installed()
+        checked_raw, checked = self._checked
+        if checked and checked_raw == raw:
+            return checked
+        return raw
 
     @property
     def latest_version(self) -> str | None:
         # Fall back to the installed version so the entity reads "up to date"
         # rather than "unknown" until/unless a newer one is reported.
+        # A firmware change since the last check makes its result stale.
+        checked_raw = self._checked[0]
+        if checked_raw is not None and checked_raw != self._raw_installed():
+            return self.installed_version
         return self._latest_version or self.installed_version
 
     @property
@@ -182,9 +196,17 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
                 "firmware update check failed for %s: %s", self.coordinator.ip, err
             )
             return
-        if result is not None:
-            self._latest_version = getattr(result, "latest_version", None)
-            self._release_url = getattr(result, "release_url", None)
+        if result is None:
+            return
+        # asic-rs 0.8.6 FirmwareStats: both versions normalised by the lib
+        # (BOS "2026-09-11-…-26.09-plus" -> "26.9"), plus update_available.
+        current = getattr(result, "current_version", None)
+        latest = getattr(result, "latest_version", None)
+        self._checked = (self._raw_installed(), current)
+        if getattr(result, "update_available", None) is False:
+            latest = current
+        self._latest_version = latest
+        self._release_url = getattr(result, "release_url", None)
 
     async def async_check_firmware_update(self) -> dict:
         """Service `miner.check_firmware_update`: force a check now, return result.
