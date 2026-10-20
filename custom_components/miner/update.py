@@ -23,11 +23,13 @@ only after SCAN_INTERVAL, which restarts with every HA restart), then daily.
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
 import logging
 import os
 import re
+import shutil
 import tempfile
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -63,6 +65,10 @@ _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
 # Firmware images are ~100 MB from the vendor feed.
 _DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=900, sock_read=120)
 _DOWNLOAD_CHUNK = 1024 * 1024
+# A failed automatic check (miner/release server down) is retried after this.
+_RETRY_AFTER = 600
+# Install + reboot; Install stays blocked until the firmware changed or this passed.
+_UPGRADE_TIMEOUT = 30 * 60
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -159,10 +165,15 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
         self._checked: tuple[str | None, str | None] = (None, None)
         # Download URL of the latest image (FirmwareUpdate.Remote), if any.
         self._firmware_url: str | None = None
-        # True once a check returned a result; until then a reachable miner
-        # triggers a check right away instead of waiting for SCAN_INTERVAL.
+        # Auto check: right after start (as soon as the miner answers) and after
+        # a firmware change, instead of only every SCAN_INTERVAL. A failed auto
+        # check waits _RETRY_AFTER before the next try.
         self._checked_once = False
-        self._check_running = False
+        self._retry_at = 0.0
+        self._check_lock = asyncio.Lock()
+        self._check_task: asyncio.Task | None = None
+        # Running upgrade: (raw firmware string before, monotonic deadline).
+        self._upgrade: tuple[str | None, float] | None = None
         self._release_url: str | None = (
             _VNISH_RELEASE_NOTES_URL if self._vnish_cloud else None
         )
@@ -177,21 +188,42 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         super()._handle_coordinator_update()
+        if not self.coordinator.last_update_success or self.coordinator.data is None:
+            return
+        raw = self._raw_installed()
+        if self._upgrade is not None:
+            before, deadline = self._upgrade
+            if raw == before and time.monotonic() < deadline:
+                return  # still installing / rebooting
+            if raw == before:
+                _LOGGER.warning(
+                    "firmware upgrade on %s: version unchanged after %d min",
+                    self.coordinator.ip,
+                    _UPGRADE_TIMEOUT // 60,
+                )
+            self._upgrade = None
+            self._attr_in_progress = False
+            self._attr_update_percentage = None
+            self._checked_once = False
+            self._retry_at = 0.0
+            self.async_write_ha_state()
+        stale = self._checked[0] is not None and self._checked[0] != raw
         if (
-            not self._checked_once
-            and not self._check_running
-            and self.coordinator.last_update_success
-            and self.coordinator.data is not None
+            (not self._checked_once or stale)
+            and time.monotonic() >= self._retry_at
+            and (self._check_task is None or self._check_task.done())
         ):
-            self.hass.async_create_task(self._async_first_check())
+            self._check_task = self.hass.async_create_task(self._async_auto_check())
 
-    async def _async_first_check(self) -> None:
-        self._check_running = True
-        try:
-            await self.async_update()
-        finally:
-            self._check_running = False
+    async def _async_auto_check(self) -> None:
+        if not await self._async_check():
+            self._retry_at = time.monotonic() + _RETRY_AFTER
         self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._check_task is not None and not self._check_task.done():
+            self._check_task.cancel()
+        await super().async_will_remove_from_hass()
 
     @property
     def should_poll(self) -> bool:
@@ -228,33 +260,48 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
         return self._release_url
 
     async def async_update(self) -> None:
-        """Determine the latest available firmware (slow path)."""
+        """Determine the latest available firmware (slow path, SCAN_INTERVAL)."""
+        await self._async_check()
+
+    async def _async_check(self) -> bool:
+        """Run one check; concurrent callers share it. True if it got a result."""
+        if self._upgrade is not None:
+            return False  # miner is installing/rebooting
+        if self._check_lock.locked():
+            async with self._check_lock:
+                return self._checked_once
+        async with self._check_lock:
+            return await self._async_check_locked()
+
+    async def _async_check_locked(self) -> bool:
         if self._vnish_cloud:
             session = async_get_clientsession(self.coordinator.hass)
             latest = await _fetch_vnish_latest_stable(session)
-            if latest:
-                self._latest_version = latest
-                self._checked_once = True
-            return
+            if not latest:
+                return False
+            self._latest_version = latest
+            self._checked_once = True
+            return True
 
         miner = self.coordinator.miner
         if miner is None:
-            return
+            return False
+        raw = self._raw_installed()  # the version this result belongs to
         try:
             result = await miner.check_firmware_update()
         except Exception as err:  # noqa: BLE001 — never let the UI crash on this
             _LOGGER.debug(
                 "firmware update check failed for %s: %s", self.coordinator.ip, err
             )
-            return
+            return False
         if result is None:
-            return
+            return False
         self._checked_once = True
         # asic-rs 0.8.6 FirmwareStats: both versions normalised by the lib
         # (BOS "2026-09-11-…-26.09-plus" -> "26.9"), plus update_available.
         current = getattr(result, "current_version", None)
         latest = getattr(result, "latest_version", None)
-        self._checked = (self._raw_installed(), current)
+        self._checked = (raw, current)
         if getattr(result, "update_available", None) is False:
             latest = current
         self._latest_version = latest
@@ -265,51 +312,62 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
             if getattr(firmware, "variant", None) == "remote"
             else None
         )
+        return True
 
     async def async_install(
         self, version: str | None, backup: bool, **kwargs: Any
     ) -> None:
-        """Download the latest image and flash it via the library."""
+        """Download the latest image and flash it via the library.
+
+        Stays "in progress" after the library accepted the image until the
+        coordinator reports a different firmware (reboot done) or
+        _UPGRADE_TIMEOUT passes - Install is not offered again meanwhile.
+        """
         url = self._firmware_url
         if not url:
             raise HomeAssistantError(
                 "No firmware image known - run the update check first"
             )
-        path = None
+        if self._upgrade is not None:
+            raise HomeAssistantError("A firmware upgrade is already running")
+        name = os.path.basename(url.split("?", 1)[0]) or "firmware.tar"
+        started = False
         self._attr_in_progress = True
         self._attr_update_percentage = 0
         self.async_write_ha_state()
         try:
-            path = await self._async_download(url)
-            self._attr_update_percentage = None  # flashing: no progress from the miner
-            self.async_write_ha_state()
-            await async_miner_control(
-                "Firmware upgrade",
-                self.coordinator.miner,
-                lambda m: m.upgrade_firmware(path),
+            tmpdir = await self.hass.async_add_executor_job(
+                tempfile.mkdtemp, None, "miner-fw-"
             )
-            _LOGGER.info(
-                "firmware upgrade to %s started on %s, miner reboots",
-                self._latest_version,
-                self.coordinator.ip,
-            )
-            # Next check after the reboot (new raw version) rather than in 24 h.
-            self._checked_once = False
+            try:
+                path = os.path.join(tmpdir, name)
+                await self._async_download(url, path)
+                self._attr_update_percentage = None  # flashing: no progress
+                self.async_write_ha_state()
+                raw_before = self._raw_installed()
+                await async_miner_control(
+                    "Firmware upgrade",
+                    self.coordinator.miner,
+                    lambda m: m.upgrade_firmware(path),
+                )
+                started = True
+                self._upgrade = (raw_before, time.monotonic() + _UPGRADE_TIMEOUT)
+                _LOGGER.info(
+                    "firmware upgrade to %s started on %s, miner reboots",
+                    self._latest_version,
+                    self.coordinator.ip,
+                )
+            finally:
+                await self.hass.async_add_executor_job(shutil.rmtree, tmpdir, True)
         finally:
-            if path:
-                await self.hass.async_add_executor_job(_remove_quietly, path)
-            self._attr_in_progress = False
-            self._attr_update_percentage = None
+            if not started:
+                self._attr_in_progress = False
+                self._attr_update_percentage = None
             self.async_write_ha_state()
 
-    async def _async_download(self, url: str) -> str:
-        """Stream the image to a temp file, reporting progress; return its path."""
+    async def _async_download(self, url: str, path: str) -> None:
+        """Stream the image to ``path``, reporting progress."""
         session = async_get_clientsession(self.hass)
-        name = os.path.basename(url.split("?", 1)[0]) or "firmware.tar"
-        tmpdir = await self.hass.async_add_executor_job(
-            tempfile.mkdtemp, None, "miner-fw-"
-        )
-        path = os.path.join(tmpdir, name)
         handle = await self.hass.async_add_executor_job(open, path, "wb")
         try:
             async with session.get(url, timeout=_DOWNLOAD_TIMEOUT) as resp:
@@ -332,15 +390,10 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
                         f"Firmware download incomplete: {done} of {total} bytes"
                     )
         except aiohttp.ClientError as err:
-            await self.hass.async_add_executor_job(handle.close)
-            await self.hass.async_add_executor_job(_remove_quietly, path)
             raise HomeAssistantError(f"Firmware download failed: {err}") from err
-        except BaseException:
+        finally:
+            # the caller removes the whole temp directory
             await self.hass.async_add_executor_job(handle.close)
-            await self.hass.async_add_executor_job(_remove_quietly, path)
-            raise
-        await self.hass.async_add_executor_job(handle.close)
-        return path
 
     async def async_check_firmware_update(self) -> dict:
         """Service `miner.check_firmware_update`: force a check now, return result.
@@ -361,10 +414,3 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
             "release_url": self._release_url,
         }
 
-
-def _remove_quietly(path: str) -> None:
-    """Delete a downloaded image and its temp directory, ignoring errors."""
-    with contextlib.suppress(OSError):
-        os.remove(path)
-    with contextlib.suppress(OSError):
-        os.rmdir(os.path.dirname(path))
