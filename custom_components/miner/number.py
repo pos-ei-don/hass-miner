@@ -6,11 +6,11 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import vnish
 from .const import DOMAIN
+from .control import async_miner_control
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity
 
@@ -43,7 +43,11 @@ class PowerLimitNumber(MinerEntity, NumberEntity):
         return data.wattage
 
     async def async_set_native_value(self, value: float) -> None:
-        await self.coordinator.miner.set_power_limit(value)
+        await async_miner_control(
+            f"Power limit {value:.0f} W",
+            self.coordinator.miner,
+            lambda m: m.set_power_limit(value),
+        )
         await self.coordinator.async_request_refresh()
 
 
@@ -74,11 +78,11 @@ class VnishThrottleNumber(MinerEntity, NumberEntity):
         return data.tuning_percent if data is not None else None
 
     async def async_set_native_value(self, value: float) -> None:
-        if self.coordinator.miner is None:
-            raise HomeAssistantError("miner not connected")
-        ok = await self.coordinator.miner.set_tuning_percent(int(value))
-        if ok is False:
-            raise HomeAssistantError(f"VNish throttle {int(value)}% failed")
+        await async_miner_control(
+            f"VNish throttle {int(value)}%",
+            self.coordinator.miner,
+            lambda m: m.set_tuning_percent(int(value)),
+        )
         await self.coordinator.async_request_refresh()
 
 

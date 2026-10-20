@@ -39,6 +39,7 @@ Schwester-Fork `pos-ei-don/asic-rs` (eigene FORK.md dort).
 | 4-Feld-Temp-Modell (chip/coolant getrennt) | alpha18 | hängt an Lib-PRs #285/#286 |
 | **Kein Mining-Restart nach Preset-Wechsel** (PR #2) | alpha22 | `upstream-candidate` (ai_mainprojekt#620) |
 | Status-Overlays `winter_mode` / `out_of_service` (Helper-Entity + Zustand, nur über off/unknown) | alpha52 | `upstream-candidate` |
+| Steuerbefehle über `control.async_miner_control`: abgelehnter Befehl (asic-rs ≥ 0.8.6 wirft `RuntimeError` mit Grund, ältere Backends `False`) → `HomeAssistantError` mit Grund; Lib wieder PyPI `pyasic-rs==0.8.6` statt Fork-Wheel `0.8.1.1` (Braiins-Token-Fix #391 ist in 0.8.5) | alpha54 | `upstream-candidate` |
 
 ## Integrations-Policy — zwei Achsen
 - **Unsere Changes → Upstream:** Labels `upstream-candidate` / `upstream-submitted` /

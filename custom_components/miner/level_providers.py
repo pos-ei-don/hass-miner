@@ -26,6 +26,7 @@ from pyasic_rs import TuningConfig
 from pyasic_rs.data import HashRateUnit
 
 from . import vnish
+from .control import async_miner_control
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -127,9 +128,11 @@ class VnishPresetProvider(LevelProvider):
         if self.c.supports_presets:
             # Fork wheel: select the preset via the library (auth via set_auth).
             # asic-rs 0.7.1 (#289/#291): set_preset -> set_tuning_config(preset).
-            ok = await self.c.miner.set_tuning_config(TuningConfig.preset(name))
-            if ok is False:
-                raise HomeAssistantError(f"VNish preset '{name}' failed")
+            await async_miner_control(
+                f"VNish preset '{name}'",
+                self.c.miner,
+                lambda m: m.set_tuning_config(TuningConfig.preset(name)),
+            )
         else:
             # Upstream lib (no TuningConfig.preset / set-preset path): apply via
             # the VNish REST shim (unlock -> POST /settings). Needs the pw.
@@ -278,7 +281,9 @@ class SteppedPowerProvider(LevelProvider):
         watts = _leading_int(option)
         if watts is None:
             raise HomeAssistantError(f"Invalid power level '{option}'")
-        await self.c.miner.set_power_limit(watts)
+        await async_miner_control(
+            f"Power level {watts} W", self.c.miner, lambda m: m.set_power_limit(watts)
+        )
 
 
 def _as_th(eh) -> float | None:

@@ -12,6 +12,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .control import async_miner_control
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity, naming_object_id
 
@@ -30,7 +31,9 @@ class RestartButton(MinerEntity, ButtonEntity):
         self._apply_naming("button")
 
     async def async_press(self) -> None:
-        await self.coordinator.miner.restart()
+        await async_miner_control(
+            "Restart", self.coordinator.miner, lambda m: m.restart()
+        )
 
 
 class ApplyNamingButton(MinerEntity, ButtonEntity):

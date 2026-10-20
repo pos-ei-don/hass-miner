@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .control import async_miner_control
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity
 
@@ -40,11 +41,17 @@ class FaultLightSwitch(MinerEntity, SwitchEntity):
         )
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self.coordinator.miner.set_fault_light(True)
+        await async_miner_control(
+            "Fault light on", self.coordinator.miner, lambda m: m.set_fault_light(True)
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self.coordinator.miner.set_fault_light(False)
+        await async_miner_control(
+            "Fault light off",
+            self.coordinator.miner,
+            lambda m: m.set_fault_light(False),
+        )
         await self.coordinator.async_request_refresh()
 
 
@@ -66,11 +73,15 @@ class MiningSwitch(MinerEntity, SwitchEntity):
         return self.coordinator.data.is_mining
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self.coordinator.miner.resume(timedelta(0))
+        await async_miner_control(
+            "Resume mining", self.coordinator.miner, lambda m: m.resume(timedelta(0))
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self.coordinator.miner.pause(timedelta(0))
+        await async_miner_control(
+            "Pause mining", self.coordinator.miner, lambda m: m.pause(timedelta(0))
+        )
         await self.coordinator.async_request_refresh()
 
 
