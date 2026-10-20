@@ -41,6 +41,7 @@ Schwester-Fork `pos-ei-don/asic-rs` (eigene FORK.md dort).
 | Status-Overlays `winter_mode` / `out_of_service` (Helper-Entity + Zustand, nur über off/unknown) | alpha52 | `upstream-candidate` |
 | Steuerbefehle über `control.async_miner_control`: abgelehnter Befehl (asic-rs ≥ 0.8.6 wirft `RuntimeError` mit Grund, ältere Backends `False`) → `HomeAssistantError` mit Grund; Lib wieder PyPI `pyasic-rs==0.8.6` statt Fork-Wheel `0.8.1.1` (Braiins-Token-Fix #391 ist in 0.8.5) | alpha54 | `upstream-candidate` |
 | Mining-Schalter: abgelehnte Pause/Fortsetzen ist kein Fehler, wenn der Miner danach schon im Zielzustand ist (BOS lehnt Pause direkt nach dem Boot mit HTTP 500 ab → brach Automationen ab); Firmware-Update-Entität nutzt die von der Lib normalisierten Versionen aus `FirmwareStats` (`current_version`, `update_available`) statt des rohen BOS-Strings | alpha55 | `upstream-candidate` |
+| Firmware-Install über die Lib (`supports_upgrade_firmware`, Image aus `FirmwareUpdate.Remote` herunterladen → `upgrade_firmware`), Install-Status bis zum Versionswechsel nach dem Reboot; erste Firmware-Prüfung sobald der Miner nach dem HA-Start antwortet und nach jedem Versionswechsel, Wiederholung nach 10 min. Lib: Fork-Wheel `0.8.6.1` (`wheels-vnish-40`) = v0.8.6 + BOS-v26_04-Upgrade (PR an asic-rs folgt) | alpha56 | `upstream-candidate` |
 
 ## Integrations-Policy — zwei Achsen
 - **Unsere Changes → Upstream:** Labels `upstream-candidate` / `upstream-submitted` /
