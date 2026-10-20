@@ -12,25 +12,41 @@ telemetry coordinator):
   the vendor and take the latest stable, then let Home Assistant compare it
   against the installed version.
 
-Read-only: no install action is offered.
+Install: where the library can flash the firmware (``supports_upgrade_firmware``,
+e.g. BraiinsOS 26.x) and the check reported a downloadable image
+(``FirmwareUpdate.Remote``), the entity offers Install: the image is downloaded
+to a temporary file and handed to ``miner.upgrade_firmware``; the miner reboots.
+
+Timing: the first check runs as soon as the miner answers after HA start (not
+only after SCAN_INTERVAL, which restarts with every HA restart), then daily.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import re
+import tempfile
 from datetime import timedelta
+from typing import Any
 
 import aiohttp
-from homeassistant.components.update import UpdateDeviceClass, UpdateEntity
+from homeassistant.components.update import (
+    UpdateDeviceClass,
+    UpdateEntity,
+    UpdateEntityFeature,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.core import HomeAssistant, SupportsResponse, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .control import async_miner_control
 from .coordinator import MinerCoordinator
 from .entity import MinerEntity, async_remove_stale_entities
 
@@ -44,6 +60,9 @@ SCAN_INTERVAL = timedelta(hours=24)
 _VNISH_RELEASES_URL = "https://partner.anthill.farm/api/client/releases-notes"
 _VNISH_RELEASE_NOTES_URL = "https://docs.hashcore.com/firmware/about"
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
+# Firmware images are ~100 MB from the vendor feed.
+_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=900, sock_read=120)
+_DOWNLOAD_CHUNK = 1024 * 1024
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -138,10 +157,41 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
         self._vnish_cloud = vnish_cloud and not coordinator.supports_check_firmware_update
         self._latest_version: str | None = None
         self._checked: tuple[str | None, str | None] = (None, None)
+        # Download URL of the latest image (FirmwareUpdate.Remote), if any.
+        self._firmware_url: str | None = None
+        # True once a check returned a result; until then a reachable miner
+        # triggers a check right away instead of waiting for SCAN_INTERVAL.
+        self._checked_once = False
+        self._check_running = False
         self._release_url: str | None = (
             _VNISH_RELEASE_NOTES_URL if self._vnish_cloud else None
         )
         self._apply_naming("update")
+
+    @property
+    def supported_features(self) -> UpdateEntityFeature:
+        if self.coordinator.supports_upgrade_firmware and self._firmware_url:
+            return UpdateEntityFeature.INSTALL | UpdateEntityFeature.PROGRESS
+        return UpdateEntityFeature(0)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        super()._handle_coordinator_update()
+        if (
+            not self._checked_once
+            and not self._check_running
+            and self.coordinator.last_update_success
+            and self.coordinator.data is not None
+        ):
+            self.hass.async_create_task(self._async_first_check())
+
+    async def _async_first_check(self) -> None:
+        self._check_running = True
+        try:
+            await self.async_update()
+        finally:
+            self._check_running = False
+        self.async_write_ha_state()
 
     @property
     def should_poll(self) -> bool:
@@ -184,6 +234,7 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
             latest = await _fetch_vnish_latest_stable(session)
             if latest:
                 self._latest_version = latest
+                self._checked_once = True
             return
 
         miner = self.coordinator.miner
@@ -198,6 +249,7 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
             return
         if result is None:
             return
+        self._checked_once = True
         # asic-rs 0.8.6 FirmwareStats: both versions normalised by the lib
         # (BOS "2026-09-11-…-26.09-plus" -> "26.9"), plus update_available.
         current = getattr(result, "current_version", None)
@@ -207,6 +259,88 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
             latest = current
         self._latest_version = latest
         self._release_url = getattr(result, "release_url", None)
+        firmware = getattr(result, "firmware", None)
+        self._firmware_url = (
+            getattr(firmware, "url", None)
+            if getattr(firmware, "variant", None) == "remote"
+            else None
+        )
+
+    async def async_install(
+        self, version: str | None, backup: bool, **kwargs: Any
+    ) -> None:
+        """Download the latest image and flash it via the library."""
+        url = self._firmware_url
+        if not url:
+            raise HomeAssistantError(
+                "No firmware image known - run the update check first"
+            )
+        path = None
+        self._attr_in_progress = True
+        self._attr_update_percentage = 0
+        self.async_write_ha_state()
+        try:
+            path = await self._async_download(url)
+            self._attr_update_percentage = None  # flashing: no progress from the miner
+            self.async_write_ha_state()
+            await async_miner_control(
+                "Firmware upgrade",
+                self.coordinator.miner,
+                lambda m: m.upgrade_firmware(path),
+            )
+            _LOGGER.info(
+                "firmware upgrade to %s started on %s, miner reboots",
+                self._latest_version,
+                self.coordinator.ip,
+            )
+            # Next check after the reboot (new raw version) rather than in 24 h.
+            self._checked_once = False
+        finally:
+            if path:
+                await self.hass.async_add_executor_job(_remove_quietly, path)
+            self._attr_in_progress = False
+            self._attr_update_percentage = None
+            self.async_write_ha_state()
+
+    async def _async_download(self, url: str) -> str:
+        """Stream the image to a temp file, reporting progress; return its path."""
+        session = async_get_clientsession(self.hass)
+        name = os.path.basename(url.split("?", 1)[0]) or "firmware.tar"
+        tmpdir = await self.hass.async_add_executor_job(
+            tempfile.mkdtemp, None, "miner-fw-"
+        )
+        path = os.path.join(tmpdir, name)
+        handle = await self.hass.async_add_executor_job(open, path, "wb")
+        try:
+            async with session.get(url, timeout=_DOWNLOAD_TIMEOUT) as resp:
+                if resp.status != 200:
+                    raise HomeAssistantError(
+                        f"Firmware download failed: HTTP {resp.status} for {url}"
+                    )
+                total = resp.content_length or 0
+                done = 0
+                async for chunk in resp.content.iter_chunked(_DOWNLOAD_CHUNK):
+                    await self.hass.async_add_executor_job(handle.write, chunk)
+                    done += len(chunk)
+                    if total:
+                        pct = min(99, int(done * 100 / total))
+                        if pct != self._attr_update_percentage:
+                            self._attr_update_percentage = pct
+                            self.async_write_ha_state()
+                if total and done != total:
+                    raise HomeAssistantError(
+                        f"Firmware download incomplete: {done} of {total} bytes"
+                    )
+        except aiohttp.ClientError as err:
+            await self.hass.async_add_executor_job(handle.close)
+            await self.hass.async_add_executor_job(_remove_quietly, path)
+            raise HomeAssistantError(f"Firmware download failed: {err}") from err
+        except BaseException:
+            await self.hass.async_add_executor_job(handle.close)
+            await self.hass.async_add_executor_job(_remove_quietly, path)
+            raise
+        await self.hass.async_add_executor_job(handle.close)
+        return path
 
     async def async_check_firmware_update(self) -> dict:
         """Service `miner.check_firmware_update`: force a check now, return result.
@@ -226,3 +360,11 @@ class MinerFirmwareUpdate(MinerEntity, UpdateEntity):
             ),
             "release_url": self._release_url,
         }
+
+
+def _remove_quietly(path: str) -> None:
+    """Delete a downloaded image and its temp directory, ignoring errors."""
+    with contextlib.suppress(OSError):
+        os.remove(path)
+    with contextlib.suppress(OSError):
+        os.rmdir(os.path.dirname(path))
